@@ -68,29 +68,29 @@ paintDriveDunkThreshold = 0.35
 paintPosterDunkThreshold = 0.10
 
 # Shooting Fouls
-shootingFoulInsideBaseline = 0.23072
-shootingFoulPaintBaseline = 0.17304
-shootingFoulMidrangeBaseline = 0.05768
-shootingFoulThreeBaseline = 0.02884
-shootingFoulCornerThreeBaseline = 0.025956
+shootingFoulInsideBaseline = 0.15000
+shootingFoulPaintBaseline = 0.11250
+shootingFoulMidrangeBaseline = 0.03750
+shootingFoulThreeBaseline = 0.01875
+shootingFoulCornerThreeBaseline = 0.01688
 
 shootingFoulAverageBBIQ = 20.0
 shootingFoulBBIQModifierPerPoint = 0.02
 shootingFoulMaximumBBIQGap = 15.0
 
 shootingFoulChanceMinimum = 0.001
-shootingFoulChanceMaximum = 0.25
+shootingFoulChanceMaximum = 0.18
 shootingFoulMadeShotModifier = 0.55
 
 # Non-Shooting Fouls
-nonShootingFoulInsideBaseline = 0.051294
-nonShootingFoulPaintBaseline = 0.042745
-nonShootingFoulMidrangeBaseline = 0.0299215
-nonShootingFoulPerimeterBaseline = 0.0213725
-nonShootingFoulBackcourtBaseline = 0.0128235
+nonShootingFoulInsideBaseline = 0.034000
+nonShootingFoulPaintBaseline = 0.028000
+nonShootingFoulMidrangeBaseline = 0.020000
+nonShootingFoulPerimeterBaseline = 0.014000
+nonShootingFoulBackcourtBaseline = 0.009000
 
 nonShootingFoulChanceMinimum = 0.001
-nonShootingFoulChanceMaximum = 0.10
+nonShootingFoulChanceMaximum = 0.08
 
 # Offensive Fouls
 offensiveFoulInsideBaseline = 0.025

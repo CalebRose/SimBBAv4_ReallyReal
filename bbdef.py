@@ -31,7 +31,7 @@ def getPlayers(t1_lineups,t2_lineups):
     Return college-lineup player assignments and usage weights.
 
     Example:
-        t1Players["g1"]["player_id"] -> player ID
+        t1Players["g1"]["ID"] -> player ID
         t1Players["g1"]["usage"] -> usage weight
     """
 
@@ -52,7 +52,7 @@ def getPlayers(t1_lineups,t2_lineups):
         raise ValueError(f"Team 2 college lineup is missing columns: {missingT2}")
 
     def buildTeamPlayers(lineups):
-        players = {slot:{"player_id":None,"usage":0.0,"inside_preference":100 / 3,"midrange_preference":100 / 3,"three_preference":100 / 3} for slot in ALL_PLAYERS}
+        players = {slot:{"ID":None,"usage":0.0,"inside_preference":100 / 3,"midrange_preference":100 / 3,"three_preference":100 / 3} for slot in ALL_PLAYERS}
         stringColumns = [("first_string_id","fs_minutes","fs_inside_proportion","fs_mid_proportion","fs_three_proportion",0),("second_string_id","ss_minutes","ss_inside_proportion","ss_mid_proportion","ss_three_proportion",1),("third_string_id","ts_minutes","ts_inside_proportion","ts_mid_proportion","ts_three_proportion",2)]
         positionSettings = {"G":("g",2),"F":("f",2),"C":("c",1)}
 
@@ -90,7 +90,7 @@ def getPlayers(t1_lineups,t2_lineups):
                     else:
                         preferences = [100 / 3,100 / 3,100 / 3]
 
-                    players[slot] = {"player_id":playerId,"usage":usage,"inside_preference":preferences[0],"midrange_preference":preferences[1],"three_preference":preferences[2]}
+                    players[slot] = {"ID":playerId,"usage":usage,"inside_preference":preferences[0],"midrange_preference":preferences[1],"three_preference":preferences[2]}
 
         return players
 
@@ -105,20 +105,20 @@ def indexRoster(roster_df):
     Index a roster DataFrame by player ID.
     """
 
-    if "player_id" not in roster_df.columns:
+    if "ID" not in roster_df.columns:
         raise ValueError(
-            "Roster DataFrame does not contain a player_id column."
+            "Roster DataFrame does not contain an ID column."
         )
 
-    if roster_df["player_id"].isna().any():
+    if roster_df["ID"].isna().any():
         raise ValueError(
-            "Roster DataFrame contains null player_id values."
+            "Roster DataFrame contains null ID values."
         )
 
     roster_df = roster_df.copy()
-    roster_df["player_id"] = roster_df["player_id"].astype(int)
+    roster_df["ID"] = roster_df["ID"].astype(int)
 
-    return roster_df.set_index("player_id", drop=False)
+    return roster_df.set_index("ID", drop=False)
 
 def get_stamina_adjusted_rating(player,ratingName,minutesPlayed,recoveryMinutes=0.0):
     baseRating = float(player[ratingName])
@@ -159,7 +159,7 @@ def weightedPlayerSelection(player_slots,team_players,roster_by_id,number_to_sel
         seenPlayerIds = set()
 
         for slot in playerSlots:
-            playerId = team_players[slot]["player_id"]
+            playerId = team_players[slot]["ID"]
             usage = team_players[slot]["usage"]
 
             if playerId is None:
@@ -167,13 +167,16 @@ def weightedPlayerSelection(player_slots,team_players,roster_by_id,number_to_sel
 
             playerId = int(playerId)
 
+            if playerId == 0:
+                continue
+
             if playerId in unavailablePlayerIds or playerId in additionalUnavailablePlayerIds or playerId in seenPlayerIds:
                 continue
 
             if playerId not in roster_by_id.index:
                 raise ValueError(f"Player ID {playerId} from slot {slot} was not found in the team roster.")
 
-            eligiblePlayers.append({"slot": slot,"player_id": playerId,"usage": max(0.0,float(usage)),})
+            eligiblePlayers.append({"slot": slot,"ID": playerId,"usage": max(0.0,float(usage)),})
             seenPlayerIds.add(playerId)
 
         return eligiblePlayers
@@ -191,8 +194,8 @@ def weightedPlayerSelection(player_slots,team_players,roster_by_id,number_to_sel
                 selectedPlayer = random.choice(remainingPlayers)
 
             selectedPlayers.append(selectedPlayer)
-            selectedPlayerId = selectedPlayer["player_id"]
-            remainingPlayers = [player for player in remainingPlayers if player["player_id"] != selectedPlayerId]
+            selectedPlayerId = selectedPlayer["ID"]
+            remainingPlayers = [player for player in remainingPlayers if player["ID"] != selectedPlayerId]
 
         return selectedPlayers
 
@@ -201,24 +204,37 @@ def weightedPlayerSelection(player_slots,team_players,roster_by_id,number_to_sel
     selectedPlayers = selectWithoutReplacement(primaryEligiblePlayers,primarySelectionCount)
 
     if len(selectedPlayers) < number_to_select:
-        selectedPlayerIds = {player["player_id"] for player in selectedPlayers}
+        selectedPlayerIds = {player["ID"] for player in selectedPlayers}
         fallbackEligiblePlayers = buildEligiblePlayers(ALL_PLAYERS,selectedPlayerIds)
         fallbackSelectionCount = number_to_select - len(selectedPlayers)
 
         if len(fallbackEligiblePlayers) < fallbackSelectionCount:
-            totalAvailablePlayers = len(selectedPlayers) + len(fallbackEligiblePlayers)
-            raise ValueError(f"Cannot select {number_to_select} players. Only {totalAvailablePlayers} eligible players remain after foul-out exclusions.")
+            # Last resort: any non-excluded, non-selected player in the full roster.
+            alreadyAccountedIds = unavailablePlayerIds | {int(p["ID"]) for p in selectedPlayers} | {int(p["ID"]) for p in fallbackEligiblePlayers}
+            rosterFallbackIds = [rid for rid in roster_by_id.index if rid not in alreadyAccountedIds]
+            if len(fallbackEligiblePlayers) + len(rosterFallbackIds) < fallbackSelectionCount:
+                totalAvailablePlayers = len(selectedPlayers) + len(fallbackEligiblePlayers) + len(rosterFallbackIds)
+                raise ValueError(f"Cannot select {number_to_select} players. Only {totalAvailablePlayers} eligible players remain after foul-out exclusions.")
+            rosterFallbackNeeded = fallbackSelectionCount - len(fallbackEligiblePlayers)
+            rosterFallbackChosen = random.sample(rosterFallbackIds, rosterFallbackNeeded)
+            for rid in rosterFallbackChosen:
+                fallbackEligiblePlayers.append({"slot": "roster_fallback", "ID": rid, "usage": 1.0})
 
         selectedPlayers.extend(selectWithoutReplacement(fallbackEligiblePlayers,fallbackSelectionCount))
 
     selectedRosterPlayers = []
     for player in selectedPlayers:
-        rosterPlayer = roster_by_id.loc[player["player_id"]].copy()
+        rosterPlayer = roster_by_id.loc[player["ID"]].copy()
         sourceSlot = player["slot"]
         rosterPlayer["lineup_source_slot"] = sourceSlot
-        rosterPlayer["inside_preference"] = team_players[sourceSlot]["inside_preference"]
-        rosterPlayer["midrange_preference"] = team_players[sourceSlot]["midrange_preference"]
-        rosterPlayer["three_preference"] = team_players[sourceSlot]["three_preference"]
+        if sourceSlot in team_players:
+            rosterPlayer["inside_preference"] = team_players[sourceSlot]["inside_preference"]
+            rosterPlayer["midrange_preference"] = team_players[sourceSlot]["midrange_preference"]
+            rosterPlayer["three_preference"] = team_players[sourceSlot]["three_preference"]
+        else:
+            rosterPlayer["inside_preference"] = 100 / 3
+            rosterPlayer["midrange_preference"] = 100 / 3
+            rosterPlayer["three_preference"] = 100 / 3
         selectedRosterPlayers.append(rosterPlayer)
 
     return selectedRosterPlayers
@@ -246,7 +262,7 @@ def subPlayers(team_players,roster_by_id,forceStarters=False,excluded_player_ids
         starters = []
 
         for slot in starter_slots:
-            player_id = team_players[slot]["player_id"]
+            player_id = team_players[slot]["ID"]
 
             if player_id is None:
                 raise ValueError(
@@ -282,7 +298,7 @@ def subPlayers(team_players,roster_by_id,forceStarters=False,excluded_player_ids
             raise ValueError(f"Protected player ID {protected_player_id} is excluded from the lineup.")
         if protected_player_id not in roster_by_id.index:
             raise ValueError(f"Protected player ID {protected_player_id} was not found in the roster.")
-        matchingSourceSlots = [slot for slot in ALL_PLAYERS if team_players[slot]["player_id"] is not None and int(team_players[slot]["player_id"]) == protected_player_id]
+        matchingSourceSlots = [slot for slot in ALL_PLAYERS if team_players[slot]["ID"] is not None and int(team_players[slot]["ID"]) == protected_player_id]
         if not matchingSourceSlots:
             raise ValueError(f"Protected player ID {protected_player_id} was not found in the college lineup.")
         sourceSlot = protected_source_slot if protected_source_slot in matchingSourceSlots else max(matchingSourceSlots,key=lambda slot:team_players[slot]["usage"])
@@ -299,10 +315,10 @@ def subPlayers(team_players,roster_by_id,forceStarters=False,excluded_player_ids
     openCenterSlots = [slot for slot in ["c1"] if selectedLineup[slot] is None]
 
     guards = weightedPlayerSelection(GUARD_PLAYERS,team_players,roster_by_id,len(openGuardSlots),excluded_player_ids,selectedPlayerIds)
-    selectedPlayerIds.update(int(player["player_id"]) for player in guards)
+    selectedPlayerIds.update(int(player["ID"]) for player in guards)
 
     forwards = weightedPlayerSelection(FORWARD_PLAYERS,team_players,roster_by_id,len(openForwardSlots),excluded_player_ids,selectedPlayerIds)
-    selectedPlayerIds.update(int(player["player_id"]) for player in forwards)
+    selectedPlayerIds.update(int(player["ID"]) for player in forwards)
 
     centers = weightedPlayerSelection(CENTER_PLAYERS,team_players,roster_by_id,len(openCenterSlots),excluded_player_ids,selectedPlayerIds)
 
@@ -320,11 +336,11 @@ def getOnCourtSlot(player, onCourt):
     Return the lineup slot occupied by the supplied player Series.
     """
 
-    player_id = int(player["player_id"])
+    player_id = int(player["ID"])
 
     for slot, on_court_player in onCourt.items():
         on_court_player_id = int(
-            on_court_player["player_id"]
+            on_court_player["ID"]
         )
 
         if on_court_player_id == player_id:
@@ -515,9 +531,9 @@ def setLineups(t1Players,t2Players,t1RosterById,t2RosterById,t1Probabilities,t2P
     t1BaseCutoff = 0
     t1StealCutoff = t1Probabilities["steal"] + t1StealsAdj + t1BaseCutoff
     t1TOCutoff = t1Probabilities["other_turnover"] + t1OtherTO + t1StealCutoff
-    t1MoveCutoff = t1Probabilities["move"] + HCAAdj + t1StealsAdjNeg + t1OtherTOAdjNeg + t1TOCutoff
-    t1PassCutoff = t1Probabilities["pass"] + HCAAdj + t1StealsAdjNeg + t1OtherTOAdjNeg + t1MoveCutoff
-    t1ShotCutoff = t1Probabilities["shot"] + HCAAdj + t1StealsAdjNeg + t1OtherTOAdjNeg + t1PassCutoff
+    t1MoveCutoff = t1Probabilities["move"] + t1StealsAdjNeg + t1OtherTOAdjNeg + t1TOCutoff
+    t1PassCutoff = t1Probabilities["pass"] + t1StealsAdjNeg + t1OtherTOAdjNeg + t1MoveCutoff
+    t1ShotCutoff = t1Probabilities["shot"] + t1StealsAdjNeg + t1OtherTOAdjNeg + t1PassCutoff
 
     t2RebDiff = t2Rebound - t1Rebound
     t2BallDef = t2Ballwork - t1Def
