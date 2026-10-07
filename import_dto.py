@@ -7,13 +7,13 @@ class ImportDTO:
 
 
 class MatchResults:
-    def __init__(self, t1, t2, r1, r2, game_id, is_nba):
+    def __init__(self, t1, t2, p_stats, game_id, is_nba, play_by_play):
         self.TeamOne = t1
         self.TeamTwo = t2
-        self.RosterOne = r1
-        self.RosterTwo = r2
+        self.PlayerStats = p_stats
         self.GameID = game_id
         self.IsNBA = is_nba
+        self.PlayByPlay = play_by_play
 
 
 class Team:
@@ -78,7 +78,7 @@ class TeamStats:
 
     def CalculateLead(self, pts, diff):
         if self.LargestLead < diff:
-            self.LargestLead += pts
+            self.LargestLead = diff
 
     def AddFieldGoal(self, made_shot):
         self.FGA += 1
@@ -122,3 +122,64 @@ class TeamStats:
 
     def AddFoul(self):
         self.Fouls += 1
+
+
+class PlayerStatsDTO:
+    def __init__(self):
+        self.PlayerID = 0
+        self.Year = 0
+        self.MatchType = ""
+        self.Minutes = 0
+        self.Possessions = 0
+        self.FGM = 0
+        self.FGA = 0
+        self.FGPercent = 0.0
+        self.ThreePointsMade = 0
+        self.ThreePointAttempts = 0
+        self.ThreePointPercent = 0.0
+        self.FTM = 0
+        self.FTA = 0
+        self.FTPercent = 0.0
+        self.Points = 0
+        self.TotalRebounds = 0
+        self.OffRebounds = 0
+        self.DefRebounds = 0
+        self.Assists = 0
+        self.Steals = 0
+        self.Blocks = 0
+        self.Turnovers = 0
+        self.Fouls = 0
+        self.FouledOut = False
+        self.IsInjured = False
+        self.InjuryName = ""
+        self.InjuryType = ""
+        self.WeeksOfRecovery = 0
+
+
+class TeamStatsDTO:
+    def __init__(self):
+        self.Points = 0
+        self.Possessions = 0
+        self.FGM = 0
+        self.FGA = 0
+        self.FGPercent = 0.0
+        self.ThreePointsMade = 0
+        self.ThreePointAttempts = 0
+        self.ThreePointPercent = 0.0
+        self.FTM = 0
+        self.FTA = 0
+        self.FTPercent = 0.0
+        self.Rebounds = 0
+        self.OffRebounds = 0
+        self.DefRebounds = 0
+        self.Assists = 0
+        self.Steals = 0
+        self.Blocks = 0
+        self.TotalTurnovers = 0
+        self.LargestLead = 0
+        self.FirstHalfScore = 0
+        self.SecondQuarterScore = 0
+        self.SecondHalfScore = 0
+        self.FourthQuarterScore = 0
+        self.OvertimeScore = 0
+        self.Fouls = 0

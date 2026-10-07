@@ -148,3 +148,61 @@ momentumQuarterBreakRetention = 0.60
 momentumOvertimeBreakRetention = 0.75
 
 momentumMaximumAttributeBonus = 0.05
+
+# Constants for EventID
+tipoff = 1
+ot_tipoff = 2
+steal = 3
+turnover = 4
+move = 5
+pass_ball = 6
+heave = 7
+free_throw = 8
+shot_three = 9
+shot_corner_three = 10
+shot_inside = 11
+shot_paint = 12
+shot_midrange = 13
+quarterOver = 14
+halfOver = 15
+gameOver = 16
+overtimeStart = 17
+overtimeOver = 18
+timeout = 19
+rebound = 20
+inbound = 21
+substitution = 22
+
+
+# Constants for OutcomeID
+no_outcome = 0
+tipoffHomeWin = 1
+tipoffAwayWin = 2
+heave_made = 3
+heave_missed = 4
+shot_made = 5
+shot_foul_made = 6
+shot_missed = 7
+shot_foul_missed = 8
+shot_blocked = 9
+shot_foul_blocked = 10
+shot_clock_violation = 11
+move_success = 12
+move_foul = 13
+pass_success = 14
+pass_deflected = 15
+pass_intercepted = 16
+pass_foul = 17
+move_cutoff = 18
+offensive_charge = 19
+move_trapped = 20
+steal_success = 21
+out_of_bounds_turnover = 22
+no_passing_lane = 23
+ft_made = 24
+ft_missed = 25
+offensive_rebound = 26
+defensive_rebound = 27
+inbound_success = 28
+media_timeout = 29
+team_timeout = 30

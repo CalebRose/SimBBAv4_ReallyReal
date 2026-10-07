@@ -118,6 +118,10 @@ def indexRoster(roster_df):
     roster_df = roster_df.copy()
     roster_df["ID"] = roster_df["ID"].astype(int)
 
+    if roster_df["ID"].duplicated().any():
+        dupes = roster_df.loc[roster_df["ID"].duplicated(keep=False), "ID"].unique().tolist()
+        raise ValueError(f"Roster DataFrame contains duplicate ID values: {dupes}")
+
     return roster_df.set_index("ID", drop=False)
 
 def get_stamina_adjusted_rating(player,ratingName,minutesPlayed,recoveryMinutes=0.0):

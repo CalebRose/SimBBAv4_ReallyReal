@@ -8,6 +8,8 @@ from datetime import datetime
 from baseprobabilities import *
 from bbdef import *
 from courtDef import *
+from import_dto import PlayerStatsDTO, TeamStatsDTO
+from play_by_play_collector import PlayByPlayCollector, BasePlayByPlay
 
 
 
@@ -75,7 +77,13 @@ _GAMEPLAN_FIELD_MAP = {
 
 
 def roster_df_from_api(players):
-    rows = [{sim_col: p.get(api_field) for sim_col, api_field in _PLAYER_FIELD_MAP.items()} for p in players]
+    rows = []
+    for p in players:
+        row = {sim_col: p.get(api_field) for sim_col, api_field in _PLAYER_FIELD_MAP.items()}
+        # PlayerID can come through as 0/missing; the row's own ID is the fallback
+        if not row["ID"]:
+            row["ID"] = row["id"] = p.get("ID")
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -167,6 +175,10 @@ class GameState:
         self.doubleTeamAdjustments = {"Man-to-Man":{"focus":{"shot":-0.020,"movement":-0.030,"pass_deflection":0.015},"teammate":{"shot":0.005,"movement":0.0075,"pass_deflection":-0.00375}},"Box-and-One Zone":{"focus":{"shot":-0.030,"movement":-0.040,"pass_deflection":0.020},"teammate":{"shot":0.0075,"movement":0.010,"pass_deflection":-0.005}}}
         self.t1Pace = str(self.t1Gameplan_df["pace"].iloc[0]).strip()
         self.t2Pace = str(self.t2Gameplan_df["pace"].iloc[0]).strip()
+        if self.t1Pace == '':
+            self.t1Pace = 'Balanced'
+        if self.t2Pace == '':
+            self.t2Pace = 'Balanced'
         if self.t1Pace not in self.paceStaminaModifiers or self.t2Pace not in self.paceStaminaModifiers:
             raise ValueError("Pace must be Very Slow, Slow, Balanced, Fast, or Very Fast.")
         self.t1PaceStaminaModifier = self.paceStaminaModifiers[self.t1Pace]
@@ -235,6 +247,9 @@ class GameState:
         self.teamPossessions = {self.t1: 0, self.t2: 0}
         self.teamPossessionTime = {self.t1: 0.0, self.t2: 0.0}
         self.lastCountedPossessionTeam = None
+        self.t1LargestLead = 0
+        self.t2LargestLead = 0
+        self.pbp = PlayByPlayCollector()
 
     # ------------------------------------------------------------------ helpers
 
@@ -299,8 +314,31 @@ class GameState:
         newParams["t2OffensiveRebound"] = max(0.0, min(1.0, newParams["t2OffensiveRebound"] + self.t2FormationOffensiveReboundAdjustment))
         return newT1, newT2, newParams
 
+    def applySubs(self, starters, protectedPlayer=None):
+        previousLineups = (
+            (self.t1, getattr(self, "t1onCourt", {}), self.t1team_df),
+            (self.t2, getattr(self, "t2onCourt", {}), self.t2team_df),
+        )
+        self.t1onCourt, self.t2onCourt, self.lineupParameters = self.pullSubs(
+            starters, protectedPlayer
+        )
+        for team, previousLineup, team_df in previousLineups:
+            previousPlayerIds = {int(player["ID"]) for player in previousLineup.values()}
+            teamId = int(team_df["id"].iloc[0])
+            for player in (self.t1onCourt if team == self.t1 else self.t2onCourt).values():
+                playerId = int(player["ID"])
+                if playerId not in previousPlayerIds:
+                    self.pbp.append(
+                        self.make_play(
+                            substitution,
+                            no_outcome,
+                            team_id=teamId,
+                            substitute_id=playerId,
+                        )
+                    )
+
     def pullFreeThrowSubs(self, protectedPlayer):
-        self.t1onCourt, self.t2onCourt, self.lineupParameters = self.pullSubs(False, protectedPlayer)
+        self.applySubs(False, protectedPlayer)
         print(self.t1 + " Free Throw Subs:")
         for p in self.t1onCourt.values(): print(p["position"] + " " + p["first_name"] + " " + p["last_name"])
         print(self.t2 + " Free Throw Subs:")
@@ -359,32 +397,42 @@ class GameState:
         recovery = self.getPlayerRecoveryMinutes(player)
         return max(0.0, (mp - recovery) / max(1.0, float(player["stamina"])) * 100)
 
-    def completeMediaTimeout(self, label, protectedPlayer=None):
+    def completeMediaTimeout(self, label, protectedPlayer=None, timeoutTeamId=None):
         print(f"{label} at {int(self.currTime // 60):02d}:{self.currTime % 60:04.1f}.")
+        self.pbp.append(
+            self.make_play(
+                timeout,
+                media_timeout,
+                team_id=timeoutTeamId if timeoutTeamId is not None else 0,
+            )
+        )
         self.applyFatigueRecovery(mediaTimeoutRecoveryMinutes, "Media-timeout breather")
         self.dampenMomentum(momentumMediaTimeoutRetention, "media timeout")
-        self.t1onCourt, self.t2onCourt, self.lineupParameters = self.pullSubs(False, protectedPlayer)
+        self.applySubs(False, protectedPlayer)
         self.teamTimeoutBlockedUntilLiveAction = True
         print(self.t1 + " Media Timeout Subs:")
         for p in self.t1onCourt.values(): print(p["position"] + " " + p["first_name"] + " " + p["last_name"])
         print(self.t2 + " Media Timeout Subs:")
         for p in self.t2onCourt.values(): print(p["position"] + " " + p["first_name"] + " " + p["last_name"])
 
-    def convertTeamTimeoutToMediaTimeout(self, protectedPlayer=None):
+    def convertTeamTimeoutToMediaTimeout(self, protectedPlayer=None, timeoutTeam=None):
         if self.period > self.periodPerGame: return False
+        timeoutTeamId = None
+        if timeoutTeam in (self.t1, self.t2):
+            timeoutTeamId = int((self.t1team_df if timeoutTeam == self.t1 else self.t2team_df)["id"].iloc[0])
         if self.league == "CBB":
             for mark in self.cbbMediaTimeoutMarks:
                 if mark not in self.cbbMediaTimeoutsTaken[self.period] and mark <= self.currTime <= mark + 30:
                     self.cbbMediaTimeoutsTaken[self.period].add(mark)
-                    self.completeMediaTimeout(f"Under-{int(mark / 60)} media timeout converted from a team timeout", protectedPlayer)
+                    self.completeMediaTimeout(f"Under-{int(mark / 60)} media timeout converted from a team timeout", protectedPlayer, timeoutTeamId)
                     return True
         else:
             if self.nbaTimeoutEventsByPeriod[self.period] == 0 and 420 <= self.currTime <= 450:
                 self.nbaTimeoutEventsByPeriod[self.period] = 1
-                self.completeMediaTimeout("Under-7 mandatory media timeout converted from a team timeout", protectedPlayer); return True
+                self.completeMediaTimeout("Under-7 mandatory media timeout converted from a team timeout", protectedPlayer, timeoutTeamId); return True
             if self.nbaTimeoutEventsByPeriod[self.period] == 1 and 180 <= self.currTime <= 210:
                 self.nbaTimeoutEventsByPeriod[self.period] = 2
-                self.completeMediaTimeout("Under-3 mandatory media timeout converted from a team timeout", protectedPlayer); return True
+                self.completeMediaTimeout("Under-3 mandatory media timeout converted from a team timeout", protectedPlayer, timeoutTeamId); return True
         return False
 
     def checkMediaTimeout(self, protectedPlayer=None):
@@ -442,13 +490,17 @@ class GameState:
             for name, active in conditions.items():
                 if active: self.teamTimeoutTriggerLatches[team][name] = True
             print(f"{team} requests a timeout: " + "; ".join(reasons) + ".")
-            if self.convertTeamTimeoutToMediaTimeout(protectedPlayer):
+            if self.convertTeamTimeoutToMediaTimeout(protectedPlayer, team):
                 print(f"The timeout is charged as a media timeout. {team} keeps all {self.teamTimeoutsRemaining[team]} team timeouts."); return True
             self.teamTimeoutsRemaining[team] -= 1
             print(f"{team} TEAM TIMEOUT at {int(self.currTime // 60):02d}:{self.currTime % 60:04.1f}. Timeouts remaining: {self.teamTimeoutsRemaining[team]}.")
+            timeoutTeamId = int((self.t1team_df if team == self.t1 else self.t2team_df)["id"].iloc[0])
+            self.pbp.append(
+                self.make_play(timeout, team_timeout, team_id=timeoutTeamId)
+            )
             self.applyFatigueRecovery(teamTimeoutRecoveryMinutes, f"{team} team-timeout breather")
             self.dampenMomentum(momentumTeamTimeoutRetention, f"{team} team timeout")
-            self.t1onCourt, self.t2onCourt, self.lineupParameters = self.pullSubs(False, protectedPlayer)
+            self.applySubs(False, protectedPlayer)
             self.teamTimeoutBlockedUntilLiveAction = True
             if self.league != "CBB" and self.period <= self.periodPerGame: self.nbaTimeoutEventsByPeriod[self.period] = 2
             print(self.t1 + " Team Timeout Subs:")
@@ -461,3 +513,129 @@ class GameState:
     def checkTimeoutStoppage(self, priorityTeam, allowNonPossession=False, protectedPlayer=None):
         if self.checkMediaTimeout(protectedPlayer): return True
         return self.checkTeamTimeout(priorityTeam, allowNonPossession, protectedPlayer)
+
+    def updateLargestLeads(self):
+        t1_lead = self.t1pts - self.t2pts
+        if t1_lead > self.t1LargestLead:
+            self.t1LargestLead = t1_lead
+        t2_lead = self.t2pts - self.t1pts
+        if t2_lead > self.t2LargestLead:
+            self.t2LargestLead = t2_lead
+
+    def to_player_stats_dtos(self):
+        result = []
+        for stats_df, fouled_out_ids in (
+            (self.t1stats, self.t1FouledOutPlayerIds),
+            (self.t2stats, self.t2FouledOutPlayerIds),
+        ):
+            for pid, row in stats_df[stats_df["MP"] > 0].iterrows():
+                dto = PlayerStatsDTO()
+                dto.PlayerID = int(pid)
+                dto.MatchType = self.league
+                dto.Minutes = int(round(float(row["MP"])))
+                fgm = int(row["Ins Shot Made"]) + int(row["Mid Shot Made"]) + int(row["3PT Shot Made"])
+                fga = int(row["Ins Shot Att"]) + int(row["Mid Shot Att"]) + int(row["3PT Shot Att"])
+                dto.FGM = fgm
+                dto.FGA = fga
+                dto.FGPercent = round(fgm / fga, 4) if fga > 0 else 0.0
+                dto.ThreePointsMade = int(row["3PT Shot Made"])
+                dto.ThreePointAttempts = int(row["3PT Shot Att"])
+                dto.ThreePointPercent = round(dto.ThreePointsMade / dto.ThreePointAttempts, 4) if dto.ThreePointAttempts > 0 else 0.0
+                dto.FTM = int(row["FT Shot Made"])
+                dto.FTA = int(row["FT Shot Att"])
+                dto.FTPercent = round(dto.FTM / dto.FTA, 4) if dto.FTA > 0 else 0.0
+                dto.Points = int(row["Pts"])
+                dto.OffRebounds = int(row["OREB"])
+                dto.DefRebounds = int(row["DREB"])
+                dto.TotalRebounds = dto.OffRebounds + dto.DefRebounds
+                dto.Assists = int(row["Assist"])
+                dto.Steals = int(row["Stl"])
+                dto.Blocks = int(row["Blk"])
+                dto.Turnovers = int(row["TO"])
+                dto.Fouls = int(row["Foul"])
+                dto.FouledOut = int(pid) in fouled_out_ids
+                result.append(dto)
+        return result
+
+    def make_play(self, event_id, outcome_id, elapsed=0,
+                  ball_carrier=None, defender=None,
+                  blocking_id=0, stealing_id=0, fouling_id=0, passed_id=0,
+                  next_x=0, next_y=0, team_id=None, substitute_id=0):
+        x, y = self.courtPos if isinstance(self.courtPos, tuple) else (0, 0)
+        if team_id is None:
+            if self.possTeam == self.t1:
+                team_id = int(self.t1team_df["id"].iloc[0])
+            elif self.possTeam == self.t2:
+                team_id = int(self.t2team_df["id"].iloc[0])
+            else:
+                team_id = 0
+        carrier = ball_carrier if ball_carrier is not None else (
+            self.possPlayer if isinstance(self.possPlayer, pd.Series) else None
+        )
+        return BasePlayByPlay(
+            GameID=self.gid,
+            Quarter=self.period,
+            TimeOnClock=int(self.currTime),
+            ShotClock=int(self.currShotClock),
+            SecondsConsumed=int(round(elapsed)),
+            HomeTeamScore=self.t1pts,
+            AwayTeamScore=self.t2pts,
+            TeamID=team_id,
+            BallCarrierID=int(carrier["ID"]) if carrier is not None else 0,
+            AssistingPlayerID=int(self.assistPlayer["ID"]) if self.assistPlayer is not None else 0,
+            PassedPlayerID=passed_id,
+            SubstitutePlayerID=substitute_id,
+            DefenderID=int(defender["ID"]) if defender is not None else 0,
+            BlockingPlayerID=blocking_id,
+            StealingPlayerID=stealing_id,
+            FoulingPlayerID=fouling_id,
+            HomeOffensiveSystem=self.t1OffensiveFormation,
+            HomeDefensiveSystem=self.t1DefensiveFormation,
+            AwayOffensiveSystem=self.t2OffensiveFormation,
+            AwayDefensiveSystem=self.t2DefensiveFormation,
+            EventID=event_id,
+            OutcomeID=outcome_id,
+            XAxis=x,
+            YAxis=y,
+            NextXAxis=next_x,
+            NextYAxis=next_y,
+        )
+
+    def to_team_stats_dto(self, is_home):
+        stats_df = self.t1stats if is_home else self.t2stats
+        teamscore = self.t1teamscore if is_home else self.t2teamscore
+        team = self.t1 if is_home else self.t2
+        dto = TeamStatsDTO()
+        fgm = int(stats_df["Ins Shot Made"].sum()) + int(stats_df["Mid Shot Made"].sum()) + int(stats_df["3PT Shot Made"].sum())
+        fga = int(stats_df["Ins Shot Att"].sum()) + int(stats_df["Mid Shot Att"].sum()) + int(stats_df["3PT Shot Att"].sum())
+        dto.FGM = fgm
+        dto.FGA = fga
+        dto.FGPercent = round(fgm / fga, 4) if fga > 0 else 0.0
+        dto.ThreePointsMade = int(stats_df["3PT Shot Made"].sum())
+        dto.ThreePointAttempts = int(stats_df["3PT Shot Att"].sum())
+        dto.ThreePointPercent = round(dto.ThreePointsMade / dto.ThreePointAttempts, 4) if dto.ThreePointAttempts > 0 else 0.0
+        dto.FTM = int(stats_df["FT Shot Made"].sum())
+        dto.FTA = int(stats_df["FT Shot Att"].sum())
+        dto.FTPercent = round(dto.FTM / dto.FTA, 4) if dto.FTA > 0 else 0.0
+        dto.Points = int(stats_df["Pts"].sum())
+        dto.OffRebounds = int(stats_df["OREB"].sum())
+        dto.DefRebounds = int(stats_df["DREB"].sum())
+        dto.Rebounds = dto.OffRebounds + dto.DefRebounds
+        dto.Assists = int(stats_df["Assist"].sum())
+        dto.Steals = int(stats_df["Stl"].sum())
+        dto.Blocks = int(stats_df["Blk"].sum())
+        dto.TotalTurnovers = int(stats_df["TO"].sum())
+        dto.Fouls = int(stats_df["Foul"].sum())
+        dto.Possessions = self.teamPossessions[team]
+        dto.LargestLead = self.t1LargestLead if is_home else self.t2LargestLead
+        sc = teamscore.iloc[0]
+        if self.league == "CBB":
+            dto.FirstHalfScore = int(sc["P1"])
+            dto.SecondHalfScore = int(sc["P2"])
+        else:
+            dto.FirstHalfScore = int(sc["P1"])
+            dto.SecondQuarterScore = int(sc["P2"])
+            dto.SecondHalfScore = int(sc["P3"])
+            dto.FourthQuarterScore = int(sc["P4"])
+        dto.OvertimeScore = int(sc["OT"])
+        return dto

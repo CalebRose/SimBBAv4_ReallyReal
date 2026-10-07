@@ -279,6 +279,7 @@ def rungame(match, gamenum=1):
                     + " takes control of the ball."
                 )
             gs.teamPossessionTime[gs.possTeam] += 1.0
+            gs.pbp.append(gs.make_play(tipoff, tipoffHomeWin if gs.possTeam == t1 else tipoffAwayWin, elapsed=1))
             tipoffJustOccurred = True
 
         if gs.possTeam == "OT_TIPOFF":
@@ -334,6 +335,7 @@ def rungame(match, gamenum=1):
                     + " takes control of the ball."
                 )
             gs.teamPossessionTime[gs.possTeam] += 1.0
+            gs.pbp.append(gs.make_play(ot_tipoff, tipoffHomeWin if gs.possTeam == t1 else tipoffAwayWin, elapsed=1))
             tipoffJustOccurred = True
 
         if gs.possTeam == t1 or gs.possTeam == t2:
@@ -699,9 +701,12 @@ def rungame(match, gamenum=1):
                             gs.t2qotpts += 3
                     print("...GOOD! IT COUNTS AT THE BUZZER!")
                     gs.adjustMomentum(offense, momentumMadeThreeSwing, "made final heave")
+                    gs.updateLargestLeads()
+                    gs.pbp.append(gs.make_play(heave, heave_made, elapsed=elapsedTime, ball_carrier=gs.possPlayer))
                 else:
                     print("...OFF THE MARK! The horn sounds.")
                     gs.adjustMomentum(defense, momentumMissSwing, "missed final heave")
+                    gs.pbp.append(gs.make_play(heave, heave_missed, elapsed=elapsedTime, ball_carrier=gs.possPlayer))
 
             if zone is not None and in_frontcourt:
                 if action == "shot":
@@ -934,6 +939,11 @@ def rungame(match, gamenum=1):
                                 else:
                                     print("...MISSED!")
                                     gs.adjustMomentum(defense, momentumMissSwing, "missed three-point shot")
+                            _evt = shot_three if zone == "three" else shot_corner_three
+                            _out = (shot_foul_made if shootingFoul else shot_made) if shotMade else (shot_blocked if shotBlocked else (shot_foul_missed if shootingFoul else shot_missed))
+                            gs.pbp.append(gs.make_play(_evt, _out, elapsed=elapsedTime, ball_carrier=shootPlayer, defender=defender, blocking_id=int(defender["ID"]) if shotBlocked else 0, fouling_id=int(defender["ID"]) if shootingFoul else 0))
+                            if shotMade:
+                                gs.updateLargestLeads()
                             gs.assistPlayer = None
                             freeThrowsAwarded = 0
                             lastFreeThrowMade = False
@@ -1015,6 +1025,9 @@ def rungame(match, gamenum=1):
                                         f"Free throw {ftNum} of {freeThrowsAwarded}: rating {ftRating:.4f} [base {baseFTRating:.2f}; MP {shootPlayerMinutes:.2f}; recovery {shootPlayerRecoveryMinutes:.2f}; fatigue load {shootPlayerFatigueMinutes:.2f}/{shooterStaminaCapacity:.2f}; modifier {shooterStaminaModifier:.3f}] | Chance: {ftChance:.2%} | Roll: {ftRoll:.4f} | {'GOOD' if ftMade else 'MISSED'}"
                                     )
                                     lastFreeThrowMade = ftMade
+                                    gs.pbp.append(gs.make_play(free_throw, ft_made if ftMade else ft_missed, ball_carrier=shootPlayer, fouling_id=int(defender["ID"])))
+                                    if ftMade:
+                                        gs.updateLargestLeads()
                                     if ftNum == 1 and freeThrowsAwarded > 1 and not ftSubsCompleted:
                                         gs.pullFreeThrowSubs(shootPlayer)
                                         ftSubsCompleted = True
@@ -1050,6 +1063,7 @@ def rungame(match, gamenum=1):
                                         + " grabs the offensive rebound for "
                                         + gs.possTeam
                                     )
+                                    gs.pbp.append(gs.make_play(rebound, offensive_rebound, ball_carrier=gs.possPlayer))
                                     gs.currShotClock = gs.shotClockReset
                                     if gs.currTime < gs.currShotClock:
                                         gs.currShotClock = gs.currTime
@@ -1084,6 +1098,7 @@ def rungame(match, gamenum=1):
                                         + " grabs the defensive rebound for "
                                         + gs.possTeam
                                     )
+                                    gs.pbp.append(gs.make_play(rebound, defensive_rebound, ball_carrier=gs.possPlayer))
                                     gs.defendedPlayerId = None
                                     gs.currentDefender = None
                                     gs.previousDefender = None
@@ -1113,6 +1128,7 @@ def rungame(match, gamenum=1):
                                     + " takes the ball out for "
                                     + gs.possTeam
                                 )
+                                gs.pbp.append(gs.make_play(inbound, inbound_success, ball_carrier=gs.possPlayer))
                                 gs.finalHeavePending = True
                                 gs.defendedPlayerId = None
                                 gs.currentDefender = None
@@ -1384,6 +1400,11 @@ def rungame(match, gamenum=1):
                                 else:
                                     print("...MISSED!")
                                     gs.adjustMomentum(defense, momentumMissSwing, "missed two-point shot")
+                            _evt = shot_inside if zone == "inside" else (shot_paint if zone == "paint" else shot_midrange)
+                            _out = (shot_foul_made if shootingFoul else shot_made) if shotMade else (shot_blocked if shotBlocked else (shot_foul_missed if shootingFoul else shot_missed))
+                            gs.pbp.append(gs.make_play(_evt, _out, elapsed=elapsedTime, ball_carrier=shootPlayer, defender=defender, blocking_id=int(defender["ID"]) if shotBlocked else 0, fouling_id=int(defender["ID"]) if shootingFoul else 0))
+                            if shotMade:
+                                gs.updateLargestLeads()
                             gs.assistPlayer = None
                             freeThrowsAwarded = 0
                             lastFreeThrowMade = False
@@ -1465,6 +1486,9 @@ def rungame(match, gamenum=1):
                                         f"Free throw {ftNum} of {freeThrowsAwarded}: rating {ftRating:.4f} [base {baseFTRating:.2f}; MP {shootPlayerMinutes:.2f}; recovery {shootPlayerRecoveryMinutes:.2f}; fatigue load {shootPlayerFatigueMinutes:.2f}/{shooterStaminaCapacity:.2f}; modifier {shooterStaminaModifier:.3f}] | Chance: {ftChance:.2%} | Roll: {ftRoll:.4f} | {'GOOD' if ftMade else 'MISSED'}"
                                     )
                                     lastFreeThrowMade = ftMade
+                                    gs.pbp.append(gs.make_play(free_throw, ft_made if ftMade else ft_missed, ball_carrier=shootPlayer, fouling_id=int(defender["ID"])))
+                                    if ftMade:
+                                        gs.updateLargestLeads()
                                     if ftNum == 1 and freeThrowsAwarded > 1 and not ftSubsCompleted:
                                         gs.pullFreeThrowSubs(shootPlayer)
                                         ftSubsCompleted = True
@@ -1497,6 +1521,7 @@ def rungame(match, gamenum=1):
                                         + " grabs the offensive rebound for "
                                         + gs.possTeam
                                     )
+                                    gs.pbp.append(gs.make_play(rebound, offensive_rebound, ball_carrier=gs.possPlayer))
                                     gs.currShotClock = gs.shotClockReset
                                     if gs.currTime < gs.currShotClock:
                                         gs.currShotClock = gs.currTime
@@ -1531,6 +1556,7 @@ def rungame(match, gamenum=1):
                                         + " grabs the defensive rebound for "
                                         + gs.possTeam
                                     )
+                                    gs.pbp.append(gs.make_play(rebound, defensive_rebound, ball_carrier=gs.possPlayer))
                                     gs.defendedPlayerId = None
                                     gs.currentDefender = None
                                     gs.previousDefender = None
@@ -1560,6 +1586,7 @@ def rungame(match, gamenum=1):
                                     + " takes the ball out for "
                                     + gs.possTeam
                                 )
+                                gs.pbp.append(gs.make_play(inbound, inbound_success, ball_carrier=gs.possPlayer))
                                 gs.finalHeavePending = True
                                 gs.defendedPlayerId = None
                                 gs.currentDefender = None
@@ -1572,6 +1599,8 @@ def rungame(match, gamenum=1):
             if not took_shot:
                 if gs.currShotClock <= 0 and action != "shot" and gs.currTime > 0:
                     print("Shot clock violation.")
+                    violatingPlayer = gs.possPlayer
+                    violationTeamId = int((gs.t1team_df if offense == t1 else gs.t2team_df)["id"].iloc[0])
                     gs.checkTimeoutStoppage(defense, False)
                     gs.assistPlayer = None
                     gs.currShotClock = gs.shotClock
@@ -1612,6 +1641,7 @@ def rungame(match, gamenum=1):
                             + t1
                             + "."
                         )
+                    gs.pbp.append(gs.make_play(turnover, shot_clock_violation, elapsed=elapsedTime, ball_carrier=violatingPlayer, team_id=violationTeamId))
                     gs.finalHeavePending = True
 
                 else:
@@ -1748,6 +1778,7 @@ def rungame(match, gamenum=1):
                                         )
                                     print(footerPos)
                                     gs.printMomentumMeter()
+                                    gs.pbp.append(gs.make_play(move, move_success if movementSuccessful else move_cutoff, elapsed=elapsedTime, defender=defender, next_x=int(gs.courtPos[0]), next_y=int(gs.courtPos[1])))
                                 else:
                                     gs.assistPlayer = None
                                     gs.assistMovementCount = 0
@@ -1816,6 +1847,7 @@ def rungame(match, gamenum=1):
                                     print(
                                         f"Non-shooting foul by {defender['position']} {defender['first_name']} {defender['last_name']} on {gs.possPlayer['position']} {gs.possPlayer['first_name']} {gs.possPlayer['last_name']}!"
                                     )
+                                    gs.pbp.append(gs.make_play(move, move_foul, elapsed=elapsedTime, ball_carrier=gs.possPlayer, defender=defender, fouling_id=int(defender["ID"])))
                                     print(f"Defending team fouls this half: {defendingHalfTeamFouls}")
                                     if defenderFouledOut:
                                         print(
@@ -1909,6 +1941,9 @@ def rungame(match, gamenum=1):
                                                 f"Free throw {ftNum} of {freeThrowsAwarded}: rating {ftRating:.4f} [base {baseFTRating:.2f}; MP {ftShooterMinutes:.2f}; recovery {ftRecoveryMinutes:.2f}; fatigue load {ftFatigueMinutes:.2f}/{ftStaminaCapacity:.2f}; modifier {ftStaminaModifier:.3f}] | Chance: {ftChance:.2%} | Roll: {ftRoll:.4f} | {'GOOD' if ftMade else 'MISSED'}"
                                             )
                                             lastFreeThrowMade = ftMade
+                                            gs.pbp.append(gs.make_play(free_throw, ft_made if ftMade else ft_missed, ball_carrier=gs.possPlayer, fouling_id=int(defender["ID"])))
+                                            if ftMade:
+                                                gs.updateLargestLeads()
                                             if bonusType == "one_and_one" and ftNum == 1 and not ftMade:
                                                 print("The front end of the one-and-one is missed. The ball is live!")
                                                 break
@@ -1926,7 +1961,7 @@ def rungame(match, gamenum=1):
                                         and freeThrowsAwarded == 0
                                         and not nsFoulMediaTimeout
                                     ):
-                                        gs.t1onCourt, gs.t2onCourt, gs.lineupParameters = gs.pullSubs(False)
+                                        gs.applySubs(False)
                                         if offense == t1:
                                             offense_df = gs.t1onCourt
                                             defense_df = gs.t2onCourt
@@ -1961,6 +1996,7 @@ def rungame(match, gamenum=1):
                                             + gs.possTeam
                                             + "."
                                         )
+                                        gs.pbp.append(gs.make_play(inbound, inbound_success, ball_carrier=gs.possPlayer))
                                         gs.finalHeavePending = True
                                     elif not lastFreeThrowMade:
                                         rebRand = random.random()
@@ -1982,6 +2018,7 @@ def rungame(match, gamenum=1):
                                                 + " grabs the offensive rebound for "
                                                 + gs.possTeam
                                             )
+                                            gs.pbp.append(gs.make_play(rebound, offensive_rebound, ball_carrier=gs.possPlayer))
                                             gs.currShotClock = gs.shotClockReset
                                             if gs.currTime < gs.currShotClock:
                                                 gs.currShotClock = gs.currTime
@@ -2016,6 +2053,7 @@ def rungame(match, gamenum=1):
                                                 + " grabs the defensive rebound for "
                                                 + gs.possTeam
                                             )
+                                            gs.pbp.append(gs.make_play(rebound, defensive_rebound, ball_carrier=gs.possPlayer))
                                             gs.defendedPlayerId = None
                                             gs.currentDefender = None
                                             gs.previousDefender = None
@@ -2048,6 +2086,7 @@ def rungame(match, gamenum=1):
                                             + " takes the ball out for "
                                             + gs.possTeam
                                         )
+                                        gs.pbp.append(gs.make_play(inbound, inbound_success, ball_carrier=gs.possPlayer))
                                         gs.finalHeavePending = True
                                     print(footerPos)
                                     gs.printMomentumMeter()
@@ -2115,6 +2154,7 @@ def rungame(match, gamenum=1):
                                 print(
                                     f"OFFENSIVE FOUL! {gs.possPlayer['position']} {gs.possPlayer['first_name']} {gs.possPlayer['last_name']} is called for a charge drawn by {defender['position']} {defender['first_name']} {defender['last_name']}!"
                                 )
+                                gs.pbp.append(gs.make_play(move, offensive_charge, elapsed=elapsedTime, ball_carrier=gs.possPlayer, defender=defender, fouling_id=int(gs.possPlayer["ID"])))
                                 print(f"Offensive team fouls this half: {offensiveHalfTeamFouls}")
                                 if offensivePlayerFouledOut:
                                     print(
@@ -2124,7 +2164,7 @@ def rungame(match, gamenum=1):
                                 if (
                                     offensivePlayerFouledOut or offensivePlayerFoulProtected
                                 ) and not offFoulMediaTimeout:
-                                    gs.t1onCourt, gs.t2onCourt, gs.lineupParameters = gs.pullSubs(False)
+                                    gs.applySubs(False)
                                     subReason = "foul-out" if offensivePlayerFouledOut else "foul protection"
                                     print(t1 + " Subs after " + subReason + ":")
                                     for p in gs.t1onCourt.values():
@@ -2162,6 +2202,7 @@ def rungame(match, gamenum=1):
                                     + gs.possTeam
                                     + "."
                                 )
+                                gs.pbp.append(gs.make_play(inbound, inbound_success, ball_carrier=gs.possPlayer))
                                 gs.finalHeavePending = True
                                 print(footerPos)
                                 gs.printMomentumMeter()
@@ -2186,8 +2227,11 @@ def rungame(match, gamenum=1):
                             )
                             print(footerPos)
                             gs.printMomentumMeter()
+                            gs.pbp.append(gs.make_play(move, move_trapped, elapsed=elapsedTime))
 
                     elif action == "pass":
+                        passingPlayer = gs.possPlayer
+                        passingTeamId = int((gs.t1team_df if offense == t1 else gs.t2team_df)["id"].iloc[0])
                         formationWeights = (
                             gs.t1FormationDestinationWeights if offense == t1 else gs.t2FormationDestinationWeights
                         )
@@ -2287,6 +2331,7 @@ def rungame(match, gamenum=1):
                                     gs.printMomentumMeter()
                                     gs.possPlayer = pickupPlayer
                                     gs.assistPlayer = None
+                                    gs.pbp.append(gs.make_play(pass_ball, pass_deflected, elapsed=elapsedTime, ball_carrier=passingPlayer, defender=defender, team_id=passingTeamId))
                                 else:
                                     pickupPlayer = random.choice(list(defense_df.values()))
                                     print(
@@ -2332,6 +2377,7 @@ def rungame(match, gamenum=1):
                                     gs.previousDefender = None
                                     gs.possPlayer = pickupPlayer
                                     gs.assistPlayer = None
+                                    gs.pbp.append(gs.make_play(pass_ball, pass_intercepted, elapsed=elapsedTime, ball_carrier=passingPlayer, defender=defender, stealing_id=int(pickupPlayer["ID"]), team_id=passingTeamId))
                             else:
                                 gs.assistPlayer = gs.possPlayer
                                 gs.assistMovementCount = 0
@@ -2398,6 +2444,7 @@ def rungame(match, gamenum=1):
                                 )
                                 print(footerPos)
                                 gs.printMomentumMeter()
+                                gs.pbp.append(gs.make_play(pass_ball, pass_success, elapsed=elapsedTime, ball_carrier=passingPlayer, defender=defender, passed_id=int(passReceive["ID"]), team_id=passingTeamId))
                                 gs.possPlayer = passReceive
                         else:
                             gs.assistPlayer = None
@@ -2421,10 +2468,13 @@ def rungame(match, gamenum=1):
                             )
                             print(footerPos)
                             gs.printMomentumMeter()
+                            gs.pbp.append(gs.make_play(pass_ball, no_passing_lane, elapsed=elapsedTime))
 
                     elif action == "turnover":
                         gs.assistPlayer = None
                         turnoverTeam = gs.possTeam
+                        turnoverPlayer = gs.possPlayer
+                        turnoverTeamId = int((gs.t1team_df if turnoverTeam == t1 else gs.t2team_df)["id"].iloc[0])
                         if turnoverTeam == t1:
                             gs.t1stats.at[gs.possPlayer["id"].item(), "TO"] += 1
                         else:
@@ -2449,7 +2499,7 @@ def rungame(match, gamenum=1):
                         )
                         mediaTimeoutTaken = gs.checkTimeoutStoppage(defense, True)
                         if not mediaTimeoutTaken:
-                            gs.t1onCourt, gs.t2onCourt, gs.lineupParameters = gs.pullSubs(False)
+                            gs.applySubs(False)
                             print(t1 + " Subs:")
                             for p in gs.t1onCourt.values():
                                 print(p["position"] + " " + p["first_name"] + " " + p["last_name"])
@@ -2485,9 +2535,12 @@ def rungame(match, gamenum=1):
                         else:
                             gs.possTeam = t1
                             gs.courtPos = (2, 1) if not gs.crossed_midcourt else (-2, 1)
+                        gs.pbp.append(gs.make_play(turnover, out_of_bounds_turnover, elapsed=elapsedTime, ball_carrier=turnoverPlayer, team_id=turnoverTeamId))
 
                     elif action == "steal":
                         gs.assistPlayer = None
+                        stolenFromPlayer = gs.possPlayer
+                        stolenFromTeamId = int((gs.t1team_df if gs.possTeam == t1 else gs.t2team_df)["id"].iloc[0])
                         stealPlayer = random.choice(list(defense_df.values()))
                         print(
                             periodLabel
@@ -2532,10 +2585,18 @@ def rungame(match, gamenum=1):
                         if gs.currTime <= gs.shotClock:
                             gs.currShotClock = gs.currTime
                         gs.crossed_midcourt = False
-
+                        gs.pbp.append(gs.make_play(steal, steal_success, elapsed=elapsedTime, ball_carrier=stolenFromPlayer, defender=defender, stealing_id=int(stealPlayer["ID"]), team_id=stolenFromTeamId))
         if gs.currTime <= 0 and gs.gameOn:
             gs.periodOn = False
             gs.assistPlayer = None
+            if gs.period > gs.periodPerGame:
+                gs.pbp.append(gs.make_play(overtimeOver, no_outcome))
+            elif gs.league == "CBB" and gs.period == 1:
+                gs.pbp.append(gs.make_play(halfOver, no_outcome))
+            elif gs.league != "CBB" and gs.period == 2:
+                gs.pbp.append(gs.make_play(halfOver, no_outcome))
+            elif gs.league != "CBB":
+                gs.pbp.append(gs.make_play(quarterOver, no_outcome))
             if gs.period < gs.periodPerGame:
                 print(
                     "End of "
@@ -2568,9 +2629,9 @@ def rungame(match, gamenum=1):
                     gs.applyFatigueRecovery(quarterBreakRecoveryMinutes, "Quarter-break breather")
                     gs.dampenMomentum(momentumQuarterBreakRetention, "quarter break")
                 if (gs.league == "CBB" and gs.period == 2) or (gs.league != "CBB" and gs.period == 3):
-                    gs.t1onCourt, gs.t2onCourt, gs.lineupParameters = gs.pullSubs(True)
+                    gs.applySubs(True)
                 else:
-                    gs.t1onCourt, gs.t2onCourt, gs.lineupParameters = gs.pullSubs(False)
+                    gs.applySubs(False)
                 print(t1 + " Subs:")
                 for p in gs.t1onCourt.values():
                     print(p['position'] + " " + p['first_name'] + " " + p['last_name'])
@@ -2596,6 +2657,7 @@ def rungame(match, gamenum=1):
                     )
                     gs.finalHeavePending = True
                     gs.courtPos = (4, 3)
+                    gs.pbp.append(gs.make_play(inbound, inbound_success, ball_carrier=gs.possPlayer))
                 elif gs.possTeam == t2:
                     gs.possPlayer = random.choice(list(gs.t2onCourt.values()))
                     print(
@@ -2612,6 +2674,7 @@ def rungame(match, gamenum=1):
                     )
                     gs.finalHeavePending = True
                     gs.courtPos = (-4, 3)
+                    gs.pbp.append(gs.make_play(inbound, inbound_success, ball_carrier=gs.possPlayer))
                 gs.periodOn = True
             elif gs.period >= gs.periodPerGame and gs.t1pts == gs.t2pts:
                 print("We're headed to overtime!")
@@ -2627,7 +2690,7 @@ def rungame(match, gamenum=1):
                 gs.dampenMomentum(momentumOvertimeBreakRetention, "overtime break")
                 gs.currShotClock = gs.shotClock
                 gs.currTime = gs.otQtrTime
-                gs.t1onCourt, gs.t2onCourt, gs.lineupParameters = gs.pullSubs(True)
+                gs.applySubs(True)
                 print(t1 + " Subs:")
                 for p in gs.t1onCourt.values():
                     print(p['position'] + " " + p['first_name'] + " " + p['last_name'])
@@ -2638,8 +2701,10 @@ def rungame(match, gamenum=1):
                 gs.courtPos = (0, 3)
                 gs.possTeam = "OT_TIPOFF"
                 gs.periodOn = True
+                gs.pbp.append(gs.make_play(overtimeStart, no_outcome))
             else:
                 print("End of the game.")
+                gs.pbp.append(gs.make_play(gameOver, no_outcome))
                 gs.gameOn = False
 
     # ------------------------------------------------------------------ final stats
@@ -2734,7 +2799,10 @@ def rungame(match, gamenum=1):
     print(teamstats)
     print(gs.t1stats[gs.t1stats["MP"] > 0.00])
     print(gs.t2stats[gs.t2stats["MP"] > 0.00])
-    return teamscore, teamstats, gs.t1stats, gs.t2stats
+    gs.t1TeamStatsDTO = gs.to_team_stats_dto(True)
+    gs.t2TeamStatsDTO = gs.to_team_stats_dto(False)
+    gs.playerStatsDTOs = gs.to_player_stats_dtos()
+    return gs
 
     # results = MatchResults(
     #     team_one, team_two, t1State.Roster, t2State.Roster, gameid, is_nba

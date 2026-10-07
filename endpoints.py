@@ -1,4 +1,5 @@
 import requests
+import json
 
 # url = "https://simnba.azurewebsites.net/api/"
 url = "http://localhost:8081/api/"
@@ -28,3 +29,8 @@ def GetTestMatchesForSimulation(dto):
     if res.status_code == 200:
         return res.json()
     return False
+
+# Send match results to the API
+def SendResults(dto):
+    obj = json.dumps(dto, default=lambda o: o.__dict__, sort_keys=True, indent=4)
+    r = requests.post(url + "admin/results/import/", data=obj)
