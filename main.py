@@ -63,6 +63,7 @@ for gameNumber, match in enumerate(matches, start=1):
     t1.Stats = gs.t1TeamStatsDTO
     t2 = Team(away)
     t2.Stats = gs.t2TeamStatsDTO
+    print(f"Game complete between {home['TeamName']}: {t1.Stats.Points} and {away['TeamName']}: {t2.Stats.Points}")
     results = MatchResults(
         t1,
         t2,

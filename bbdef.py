@@ -303,14 +303,19 @@ def subPlayers(team_players,roster_by_id,forceStarters=False,excluded_player_ids
         if protected_player_id not in roster_by_id.index:
             raise ValueError(f"Protected player ID {protected_player_id} was not found in the roster.")
         matchingSourceSlots = [slot for slot in ALL_PLAYERS if team_players[slot]["ID"] is not None and int(team_players[slot]["ID"]) == protected_player_id]
-        if not matchingSourceSlots:
-            raise ValueError(f"Protected player ID {protected_player_id} was not found in the college lineup.")
-        sourceSlot = protected_source_slot if protected_source_slot in matchingSourceSlots else max(matchingSourceSlots,key=lambda slot:team_players[slot]["usage"])
         protectedPlayer = roster_by_id.loc[protected_player_id].copy()
-        protectedPlayer["lineup_source_slot"] = sourceSlot
-        protectedPlayer["inside_preference"] = team_players[sourceSlot]["inside_preference"]
-        protectedPlayer["midrange_preference"] = team_players[sourceSlot]["midrange_preference"]
-        protectedPlayer["three_preference"] = team_players[sourceSlot]["three_preference"]
+        if matchingSourceSlots:
+            sourceSlot = protected_source_slot if protected_source_slot in matchingSourceSlots else max(matchingSourceSlots,key=lambda slot:team_players[slot]["usage"])
+            protectedPlayer["lineup_source_slot"] = sourceSlot
+            protectedPlayer["inside_preference"] = team_players[sourceSlot]["inside_preference"]
+            protectedPlayer["midrange_preference"] = team_players[sourceSlot]["midrange_preference"]
+            protectedPlayer["three_preference"] = team_players[sourceSlot]["three_preference"]
+        else:
+            # Roster fallback player (not in any lineup slot) who was brought in because too few lineup players were available.
+            protectedPlayer["lineup_source_slot"] = "roster_fallback"
+            protectedPlayer["inside_preference"] = 100 / 3
+            protectedPlayer["midrange_preference"] = 100 / 3
+            protectedPlayer["three_preference"] = 100 / 3
         selectedLineup[protected_slot] = protectedPlayer
         selectedPlayerIds.add(protected_player_id)
 
