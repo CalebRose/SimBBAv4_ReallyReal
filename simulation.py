@@ -522,6 +522,24 @@ def rungame(match, gamenum=1):
                         adjustedMoveProbability += playerShotWillingnessTransfer / 2
                         adjustedPassProbability += playerShotWillingnessTransfer / 2
 
+            playerShotVolumeMultiplier = float(gs.possPlayer["shot_volume"])
+            playerShotVolumeTransfer = 0.0
+            if zone is not None and is_in_frontcourt(team_side, gs.courtPos) and playerShotVolumeMultiplier != 1.0:
+                volumeBaseShot = max(0.0, adjustedShotProbability - shotClockUrgencyTransfer)
+                volumeTargetShot = min(shotClockUrgencyMaximumShotProbability, (volumeBaseShot * playerShotVolumeMultiplier) + shotClockUrgencyTransfer)
+                playerShotVolumeTransfer = volumeTargetShot - adjustedShotProbability
+                availableAMP = adjustedMoveProbability + adjustedPassProbability
+                if playerShotVolumeTransfer > 0:
+                    playerShotVolumeTransfer = min(playerShotVolumeTransfer, availableAMP)
+                if availableAMP > 0:
+                    vScale = (availableAMP - playerShotVolumeTransfer) / availableAMP
+                    adjustedMoveProbability *= vScale
+                    adjustedPassProbability *= vScale
+                else:
+                    adjustedMoveProbability -= playerShotVolumeTransfer / 2
+                    adjustedPassProbability -= playerShotVolumeTransfer / 2
+                adjustedShotProbability += playerShotVolumeTransfer
+
             adjustedStealCutoff = baseStealProbability
             adjustedTurnoverCutoff = adjustedStealCutoff + baseTurnoverProbability
             adjustedMoveCutoff = adjustedTurnoverCutoff + adjustedMoveProbability
@@ -548,6 +566,11 @@ def rungame(match, gamenum=1):
             if playerShotPreference is not None and not attemptFinalHeave:
                 print(
                     f"Shot preference: {preferenceZone} | Player: {playerShotPreference:.1f}% | Active lineup: {activeLineupPreferences[preferenceZone]:.1f}% | Requested adjustment: {playerShotWillingnessAdjustment:+.2%} | Actual transfer: {math.copysign(playerShotWillingnessTransfer, playerShotWillingnessAdjustment):+.2%} | Final shot chance: {adjustedShotProbability:.2%}"
+                )
+
+            if playerShotVolumeMultiplier != 1.0 and not attemptFinalHeave:
+                print(
+                    f"Shot volume: multiplier {playerShotVolumeMultiplier:.2f} | Actual transfer: {playerShotVolumeTransfer:+.2%} | Final shot chance: {adjustedShotProbability:.2%}"
                 )
 
             took_shot = False
@@ -2385,6 +2408,7 @@ def rungame(match, gamenum=1):
                                     p for p in offense_df.values() if int(p["id"]) != int(gs.possPlayer["id"])
                                 ]
                                 passTargetPrefZone = gs.getPreferenceZone(get_shot_zone(targetPos))
+                                passReceiverVolumeFactors = [1.0 + ((float(p["shot_volume"]) - 1.0) * shotVolumeReceiverStrength) for p in eligiblePassReceivers]
                                 if passTargetPrefZone is not None:
                                     ptpCol = {
                                         "inside": "inside_preference",
@@ -2403,17 +2427,18 @@ def rungame(match, gamenum=1):
                                                 ),
                                             ),
                                         )
-                                        for p in eligiblePassReceivers
+                                        * passReceiverVolumeFactors[receiverIndex]
+                                        for receiverIndex, p in enumerate(eligiblePassReceivers)
                                     ]
                                     passReceiverIndex = random.choices(
                                         range(len(eligiblePassReceivers)), weights=passReceiverWeights, k=1
                                     )[0]
                                     passReceive = eligiblePassReceivers[passReceiverIndex]
                                     print(
-                                        f"Pass receiver preference: {passTargetPrefZone} | Selected: {passReceive['first_name']} {passReceive['last_name']} {float(passReceive[ptpCol]):.1f}% | Active lineup: {activeLineupPreferences[passTargetPrefZone]:.1f}% | Selection weight: {passReceiverWeights[passReceiverIndex]:.3f}"
+                                        f"Pass receiver preference: {passTargetPrefZone} | Selected: {passReceive['first_name']} {passReceive['last_name']} {float(passReceive[ptpCol]):.1f}% | Active lineup: {activeLineupPreferences[passTargetPrefZone]:.1f}% | Shot volume factor: {passReceiverVolumeFactors[passReceiverIndex]:.3f} | Selection weight: {passReceiverWeights[passReceiverIndex]:.3f}"
                                     )
                                 else:
-                                    passReceive = random.choice(eligiblePassReceivers)
+                                    passReceive = random.choices(eligiblePassReceivers, weights=passReceiverVolumeFactors, k=1)[0]
                                 gs.courtPos = targetPos
                                 gs.crossed_midcourt = update_crossed_midcourt(
                                     team_side, gs.courtPos, gs.crossed_midcourt

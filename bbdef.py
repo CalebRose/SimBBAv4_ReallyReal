@@ -26,6 +26,26 @@ SAME_POSITION_DEFENDER_WEIGHT = 0.20
 HELP_DEFENDER_WEIGHT = 0.10
 
 
+def getShotVolumeMultiplier(value):
+    """
+    Convert a gameplan Shot Volume setting (preset name or 1-5 index) to its multiplier. Missing or unrecognized values are Normal.
+    """
+    presetNames = list(shotVolumeMultipliers.keys())
+    if value is None or pd.isna(value):
+        return shotVolumeMultipliers[shotVolumeDefault]
+    text = str(value).strip().lower().replace("_"," ").replace("-"," ")
+    for name in presetNames:
+        if text == name.lower():
+            return shotVolumeMultipliers[name]
+    try:
+        index = int(float(text))
+        if 1 <= index <= len(presetNames):
+            return shotVolumeMultipliers[presetNames[index - 1]]
+    except ValueError:
+        pass
+    return shotVolumeMultipliers[shotVolumeDefault]
+
+
 def getPlayers(t1_lineups,t2_lineups):
     """
     Return college-lineup player assignments and usage weights.
@@ -52,8 +72,8 @@ def getPlayers(t1_lineups,t2_lineups):
         raise ValueError(f"Team 2 college lineup is missing columns: {missingT2}")
 
     def buildTeamPlayers(lineups):
-        players = {slot:{"ID":None,"usage":0.0,"inside_preference":100 / 3,"midrange_preference":100 / 3,"three_preference":100 / 3} for slot in ALL_PLAYERS}
-        stringColumns = [("first_string_id","fs_minutes","fs_inside_proportion","fs_mid_proportion","fs_three_proportion",0),("second_string_id","ss_minutes","ss_inside_proportion","ss_mid_proportion","ss_three_proportion",1),("third_string_id","ts_minutes","ts_inside_proportion","ts_mid_proportion","ts_three_proportion",2)]
+        players = {slot:{"ID":None,"usage":0.0,"inside_preference":100 / 3,"midrange_preference":100 / 3,"three_preference":100 / 3,"shot_volume":1.0} for slot in ALL_PLAYERS}
+        stringColumns = [("first_string_id","fs_minutes","fs_inside_proportion","fs_mid_proportion","fs_three_proportion",0,"fs_shot_volume"),("second_string_id","ss_minutes","ss_inside_proportion","ss_mid_proportion","ss_three_proportion",1,"ss_shot_volume"),("third_string_id","ts_minutes","ts_inside_proportion","ts_mid_proportion","ts_three_proportion",2,"ts_shot_volume")]
         positionSettings = {"G":("g",2),"F":("f",2),"C":("c",1)}
 
         normalizedLineups = lineups.copy()
@@ -65,7 +85,7 @@ def getPlayers(t1_lineups,t2_lineups):
             if len(positionRows) != requiredRows:
                 raise ValueError(f"College lineup requires {requiredRows} {position} row{'s' if requiredRows != 1 else ''}; found {len(positionRows)}.")
 
-            for stringIndex,(playerColumn,usageColumn,insideColumn,midrangeColumn,threeColumn,stringOffset) in enumerate(stringColumns):
+            for stringIndex,(playerColumn,usageColumn,insideColumn,midrangeColumn,threeColumn,stringOffset,volumeColumn) in enumerate(stringColumns):
                 for rowIndex,(_,lineupRow) in enumerate(positionRows.iterrows()):
                     slotNumber = (stringOffset * requiredRows) + rowIndex + 1
                     slot = f"{slotPrefix}{slotNumber}"
@@ -90,7 +110,7 @@ def getPlayers(t1_lineups,t2_lineups):
                     else:
                         preferences = [100 / 3,100 / 3,100 / 3]
 
-                    players[slot] = {"ID":playerId,"usage":usage,"inside_preference":preferences[0],"midrange_preference":preferences[1],"three_preference":preferences[2]}
+                    players[slot] = {"ID":playerId,"usage":usage,"inside_preference":preferences[0],"midrange_preference":preferences[1],"three_preference":preferences[2],"shot_volume":getShotVolumeMultiplier(lineupRow.get(volumeColumn))}
 
         return players
 
@@ -235,10 +255,12 @@ def weightedPlayerSelection(player_slots,team_players,roster_by_id,number_to_sel
             rosterPlayer["inside_preference"] = team_players[sourceSlot]["inside_preference"]
             rosterPlayer["midrange_preference"] = team_players[sourceSlot]["midrange_preference"]
             rosterPlayer["three_preference"] = team_players[sourceSlot]["three_preference"]
+            rosterPlayer["shot_volume"] = team_players[sourceSlot]["shot_volume"]
         else:
             rosterPlayer["inside_preference"] = 100 / 3
             rosterPlayer["midrange_preference"] = 100 / 3
             rosterPlayer["three_preference"] = 100 / 3
+            rosterPlayer["shot_volume"] = 1.0
         selectedRosterPlayers.append(rosterPlayer)
 
     return selectedRosterPlayers
@@ -284,6 +306,7 @@ def subPlayers(team_players,roster_by_id,forceStarters=False,excluded_player_ids
             starter["inside_preference"] = team_players[slot]["inside_preference"]
             starter["midrange_preference"] = team_players[slot]["midrange_preference"]
             starter["three_preference"] = team_players[slot]["three_preference"]
+            starter["shot_volume"] = team_players[slot]["shot_volume"]
             starters.append(starter)
 
         return tuple(starters)
@@ -310,12 +333,14 @@ def subPlayers(team_players,roster_by_id,forceStarters=False,excluded_player_ids
             protectedPlayer["inside_preference"] = team_players[sourceSlot]["inside_preference"]
             protectedPlayer["midrange_preference"] = team_players[sourceSlot]["midrange_preference"]
             protectedPlayer["three_preference"] = team_players[sourceSlot]["three_preference"]
+            protectedPlayer["shot_volume"] = team_players[sourceSlot]["shot_volume"]
         else:
             # Roster fallback player (not in any lineup slot) who was brought in because too few lineup players were available.
             protectedPlayer["lineup_source_slot"] = "roster_fallback"
             protectedPlayer["inside_preference"] = 100 / 3
             protectedPlayer["midrange_preference"] = 100 / 3
             protectedPlayer["three_preference"] = 100 / 3
+            protectedPlayer["shot_volume"] = 1.0
         selectedLineup[protected_slot] = protectedPlayer
         selectedPlayerIds.add(protected_player_id)
 
