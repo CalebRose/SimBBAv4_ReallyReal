@@ -68,29 +68,29 @@ paintDriveDunkThreshold = 0.35
 paintPosterDunkThreshold = 0.10
 
 # Shooting Fouls
-shootingFoulInsideBaseline = 0.23072
-shootingFoulPaintBaseline = 0.17304
-shootingFoulMidrangeBaseline = 0.05768
-shootingFoulThreeBaseline = 0.02884
-shootingFoulCornerThreeBaseline = 0.025956
+shootingFoulInsideBaseline = 0.15000
+shootingFoulPaintBaseline = 0.11250
+shootingFoulMidrangeBaseline = 0.03750
+shootingFoulThreeBaseline = 0.01875
+shootingFoulCornerThreeBaseline = 0.01688
 
 shootingFoulAverageBBIQ = 20.0
 shootingFoulBBIQModifierPerPoint = 0.02
 shootingFoulMaximumBBIQGap = 15.0
 
 shootingFoulChanceMinimum = 0.001
-shootingFoulChanceMaximum = 0.25
+shootingFoulChanceMaximum = 0.18
 shootingFoulMadeShotModifier = 0.55
 
 # Non-Shooting Fouls
-nonShootingFoulInsideBaseline = 0.051294
-nonShootingFoulPaintBaseline = 0.042745
-nonShootingFoulMidrangeBaseline = 0.0299215
-nonShootingFoulPerimeterBaseline = 0.0213725
-nonShootingFoulBackcourtBaseline = 0.0128235
+nonShootingFoulInsideBaseline = 0.034000
+nonShootingFoulPaintBaseline = 0.028000
+nonShootingFoulMidrangeBaseline = 0.020000
+nonShootingFoulPerimeterBaseline = 0.014000
+nonShootingFoulBackcourtBaseline = 0.009000
 
 nonShootingFoulChanceMinimum = 0.001
-nonShootingFoulChanceMaximum = 0.10
+nonShootingFoulChanceMaximum = 0.08
 
 # Offensive Fouls
 offensiveFoulInsideBaseline = 0.025
@@ -148,3 +148,61 @@ momentumQuarterBreakRetention = 0.60
 momentumOvertimeBreakRetention = 0.75
 
 momentumMaximumAttributeBonus = 0.05
+
+# Constants for EventID
+tipoff = 1
+ot_tipoff = 2
+steal = 3
+turnover = 4
+move = 5
+pass_ball = 6
+heave = 7
+free_throw = 8
+shot_three = 9
+shot_corner_three = 10
+shot_inside = 11
+shot_paint = 12
+shot_midrange = 13
+quarterOver = 14
+halfOver = 15
+gameOver = 16
+overtimeStart = 17
+overtimeOver = 18
+timeout = 19
+rebound = 20
+inbound = 21
+substitution = 22
+
+
+# Constants for OutcomeID
+no_outcome = 0
+tipoffHomeWin = 1
+tipoffAwayWin = 2
+heave_made = 3
+heave_missed = 4
+shot_made = 5
+shot_foul_made = 6
+shot_missed = 7
+shot_foul_missed = 8
+shot_blocked = 9
+shot_foul_blocked = 10
+shot_clock_violation = 11
+move_success = 12
+move_foul = 13
+pass_success = 14
+pass_deflected = 15
+pass_intercepted = 16
+pass_foul = 17
+move_cutoff = 18
+offensive_charge = 19
+move_trapped = 20
+steal_success = 21
+out_of_bounds_turnover = 22
+no_passing_lane = 23
+ft_made = 24
+ft_missed = 25
+offensive_rebound = 26
+defensive_rebound = 27
+inbound_success = 28
+media_timeout = 29
+team_timeout = 30

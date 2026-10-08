@@ -6,1068 +6,518 @@ from pandas import DataFrame
 import math
 
 from baseprobabilities import *
-from dbconn import *
+from gamestate import *
 
 from bbdef import *
 from courtDef import *
 
-def rungame(gid, home, away, league, HC, gamenum):
-    t1 = home
-    t2 = away
 
-    if HC == 1:
-        HCA = 0.005
-    else:
-        HCA = 0
-    HCAAdj = round(HCA / 3, 12)
+def rungame(match, gamenum=1):
+    gs = GameState(match, gamenum)
+    t1 = gs.t1
+    t2 = gs.t2
 
-    gameType = league
-
-    # Quarter Length (in seconds) - CBB 1200 / NBA 720
-    # Number of Quarters per Half - CBB 1 / NBA 2
-    # Shot Clock - CBB 30 (reset 20) / NBA 24 (reset 14)
-
-    gameOn = True
-    periodOn = True
-    tipOff = True
-    period = 1
-
-    t1pts = 0
-    t2pts = 0
-
-    t1q1pts = 0
-    t1q2pts = 0
-    t1q3pts = 0
-    t1q4pts = 0
-    t1qotpts = 0
-
-    t2q1pts = 0
-    t2q2pts = 0
-    t2q3pts = 0
-    t2q4pts = 0
-    t2qotpts = 0
-
-    t13a = 0
-    t13m = 0
-    t12a = 0
-    t12m = 0
-
-    t23a = 0
-    t23m = 0
-    t22a = 0
-    t22m = 0
-
-    if gameType == "CBB":
-        qtrTime = 1200
-        otQtrTime = 300
-        periodPerGame = 2
-        shotClock = 30
-        shotClockReset = 20
-        pInd = "H"
-        foulOutLimit = 5
-    else:
-        qtrTime = 700
-        otQtrtime = 300
-        periodPerGame = 4
-        shotClock = 24
-        shotClockReset = 14
-        pInd = "Q"
-        foulOutLimit = 6
-
-    cbbMediaTimeoutMarks = [960,720,480,240]
-    cbbMediaTimeoutsTaken = {periodNumber:set() for periodNumber in range(1,periodPerGame + 1)}
-    nbaTimeoutEventsByPeriod = {periodNumber:0 for periodNumber in range(1,periodPerGame + 1)}
-
-    currTime = qtrTime
-    currShotClock = shotClock
-
-    courtPos = (0,3)
-    footerPos = ""
-    crossed_midcourt = False
-
-    t1p1pts = 0
-    t1p2pts = 0
-    t1p3pts = 0
-    t1p4pts = 0
-    t1otpts = 0
-
-    t2p1pts = 0
-    t2p2pts = 0
-    t2p3pts = 0
-    t2p4pts = 0
-    t2otpts = 0
-
-    t1pts = 0
-    t2pts = 0
-    fieldPos = 0
-
-    t1StartChance = 0.5
-    t2StartChance = 0.5
-
-    t1RosterQuery = "SELECT * FROM college_players WHERE team_abbr = '%s'" % t1
-    t1roster_df = pd.read_sql_query(con=dbconn.connect(), sql=sql_text(t1RosterQuery))
-
-    t2RosterQuery = "SELECT * FROM college_players WHERE team_abbr = '%s'" % t2
-    t2roster_df = pd.read_sql_query(con=dbconn.connect(), sql=sql_text(t2RosterQuery))
-
-    t1FouledOutPlayerIds = set()
-    t2FouledOutPlayerIds = set()
-
-    t1FirstHalfTeamFouls = 0
-    t1SecondHalfTeamFouls = 0
-    t2FirstHalfTeamFouls = 0
-    t2SecondHalfTeamFouls = 0
-
-    t1stats = pd.DataFrame().assign(id=t1roster_df['player_id'], Team=t1roster_df['team_abbr'], FName=t1roster_df['first_name'], LName=t1roster_df['last_name'],Position=t1roster_df['position'])
-    t2stats = pd.DataFrame().assign(id=t2roster_df['player_id'], Team=t2roster_df['team_abbr'], FName=t2roster_df['first_name'], LName=t2roster_df['last_name'],Position=t2roster_df['position'])
-
-    t1stats['MP'] = 0.00
-    t1stats['Assist'] = 0
-    t1stats['Ins Shot Att'] = 0
-    t1stats['Ins Shot Made'] = 0
-    t1stats['Ins Shot %'] = 0
-    t1stats['Mid Shot Att'] = 0
-    t1stats['Mid Shot Made'] = 0
-    t1stats['Mid Shot %'] = 0
-    t1stats['3PT Shot Att'] = 0
-    t1stats['3PT Shot Made'] = 0
-    t1stats['3PT Shot %'] = 0
-    t1stats['FT Shot Att'] = 0
-    t1stats['FT Shot Made'] = 0
-    t1stats['FT Shot %'] = 0
-    t1stats['OREB'] = 0
-    t1stats['DREB'] = 0
-    t1stats['Stl'] = 0
-    t1stats['Blk'] = 0
-    t1stats['TO'] = 0
-    t1stats['Foul'] = 0
-    t1stats['Pts'] = 0
-    t1stats.set_index('id', inplace=True)
-
-    t2stats['MP'] = 0.00
-    t2stats['Assist'] = 0
-    t2stats['Ins Shot Att'] = 0
-    t2stats['Ins Shot Made'] = 0
-    t2stats['Ins Shot %'] = 0
-    t2stats['Mid Shot Att'] = 0
-    t2stats['Mid Shot Made'] = 0
-    t2stats['Mid Shot %'] = 0
-    t2stats['3PT Shot Att'] = 0
-    t2stats['3PT Shot Made'] = 0
-    t2stats['3PT Shot %'] = 0
-    t2stats['FT Shot Att'] = 0
-    t2stats['FT Shot Made'] = 0
-    t2stats['FT Shot %'] = 0
-    t2stats['OREB'] = 0
-    t2stats['DREB'] = 0
-    t2stats['Stl'] = 0
-    t2stats['Blk'] = 0
-    t2stats['TO'] = 0
-    t2stats['Foul'] = 0
-    t2stats['Pts'] = 0
-    t2stats.set_index('id', inplace=True)
-
-    t1TeamQuery = "SELECT * from college_teams where abbr = '%s'" % t1
-    t2TeamQuery = "SELECT * from college_teams where abbr = '%s'" % t2
-    t1team_df = pd.read_sql_query(con=dbconn.connect(), sql=sql_text(t1TeamQuery))
-    t2team_df = pd.read_sql_query(con=dbconn.connect(), sql=sql_text(t2TeamQuery))
-    t1id = t1team_df['id'].item()
-    t2id = t2team_df['id'].item()
-
-    t1LineupQuery = "SELECT * from college_lineups where team_id = '%s' AND deleted_at IS NULL ORDER BY id" % t1id
-    t2LineupQuery = "SELECT * from college_lineups where team_id = '%s' AND deleted_at IS NULL ORDER BY id" % t2id
-    t1Lineup_df = pd.read_sql_query(con=dbconn.connect(), sql=sql_text(t1LineupQuery))
-    t2Lineup_df = pd.read_sql_query(con=dbconn.connect(), sql=sql_text(t2LineupQuery))
-    t1GameplanQuery = "SELECT pace,offensive_formation,defensive_formation,focus_player,preserve_timeouts,trigger1_enabled,trigger1_type,trigger1_value,trigger2_enabled,trigger2_value,trigger3_enabled,trigger3_value,trigger3_exhaustion,trigger4_enabled,trigger4_value from college_gameplans where team_id = '%s' AND deleted_at IS NULL" % t1id
-    t2GameplanQuery = "SELECT pace,offensive_formation,defensive_formation,focus_player,preserve_timeouts,trigger1_enabled,trigger1_type,trigger1_value,trigger2_enabled,trigger2_value,trigger3_enabled,trigger3_value,trigger3_exhaustion,trigger4_enabled,trigger4_value from college_gameplans where team_id = '%s' AND deleted_at IS NULL" % t2id
-    t1Gameplan_df = pd.read_sql_query(con=dbconn.connect(), sql=sql_text(t1GameplanQuery))
-    t2Gameplan_df = pd.read_sql_query(con=dbconn.connect(), sql=sql_text(t2GameplanQuery))
-
-    if t1Gameplan_df.empty or t2Gameplan_df.empty:
-        raise ValueError("Both teams require a college_gameplans record.")
-
-    paceStaminaModifiers = {"Very Slow":1.15,"Slow":1.10,"Balanced":1.00,"Fast":0.90,"Very Fast":0.85}
-    paceActionTimeModifiers = {"Very Slow":1.45,"Slow":1.25,"Balanced":1.00,"Fast":0.75,"Very Fast":0.55}
-    paceActionTimeWeights = {"Very Slow":[50,25,15,7,3],"Slow":[25,40,25,8,2],"Balanced":[10,20,40,20,10],"Fast":[2,8,25,40,25],"Very Fast":[3,7,15,25,50]}
-    paceShotClockUrgencyStarts = {"CBB":{"Very Slow":6.0,"Slow":8.0,"Balanced":10.0,"Fast":14.0,"Very Fast":18.0},"NBA":{"Very Slow":5.0,"Slow":7.0,"Balanced":10.0,"Fast":13.0,"Very Fast":16.0}}
-    offensiveFormationDestinationWeights = {"Balanced":{"inside":1.00,"midrange":1.00,"three":1.00},"Motion":{"inside":1.06,"midrange":0.97,"three":1.04},"Pick-and-Roll":{"inside":1.08,"midrange":1.04,"three":0.94},"Post-Up":{"inside":1.12,"midrange":0.96,"three":0.90},"Space-and-Post":{"inside":0.94,"midrange":1.05,"three":1.10}}
-    defensiveFormationDestinationWeights = {"Man-to-Man":{"inside":1.00,"midrange":1.00,"three":1.00},"1-3-1 Zone":{"inside":1.05,"midrange":0.92,"three":1.05},"3-2 Zone":{"inside":1.08,"midrange":1.02,"three":0.90},"2-3 Zone":{"inside":0.90,"midrange":1.02,"three":1.08},"Box-and-One Zone":{"inside":1.00,"midrange":1.00,"three":1.00}}
-    lineupPreferenceNeutralShare = 100 / 3
-    lineupPreferenceDestinationStrength = 0.35
-    lineupPreferenceDestinationMinimum = 0.80
-    lineupPreferenceDestinationMaximum = 1.20
-    playerShotWillingnessPerProportionPoint = 0.0015
-    playerShotWillingnessMaximumAdjustment = 0.03
-    passReceiverPreferenceWeightPerProportionPoint = 0.015
-    passReceiverPreferenceMinimumWeight = 0.65
-    passReceiverPreferenceMaximumWeight = 1.35
-    offensiveFormationReboundAdjustments = {"Balanced":0.000,"Motion":-0.005,"Pick-and-Roll":-0.005,"Post-Up":0.010,"Space-and-Post":-0.005}
-    defensiveFormationOffensiveReboundAdjustments = {"Man-to-Man":0.000,"1-3-1 Zone":0.005,"3-2 Zone":0.005,"2-3 Zone":-0.010,"Box-and-One Zone":0.005}
-    doubleTeamAdjustments = {"Man-to-Man":{"focus":{"shot":-0.020,"movement":-0.030,"pass_deflection":0.015},"teammate":{"shot":0.005,"movement":0.0075,"pass_deflection":-0.00375}},"Box-and-One Zone":{"focus":{"shot":-0.030,"movement":-0.040,"pass_deflection":0.020},"teammate":{"shot":0.0075,"movement":0.010,"pass_deflection":-0.005}}}
-    t1Pace = str(t1Gameplan_df["pace"].iloc[0]).strip()
-    t2Pace = str(t2Gameplan_df["pace"].iloc[0]).strip()
-    if t1Pace not in paceStaminaModifiers or t2Pace not in paceStaminaModifiers:
-        raise ValueError("Pace must be Very Slow, Slow, Balanced, Fast, or Very Fast.")
-    t1PaceStaminaModifier = paceStaminaModifiers[t1Pace]
-    t2PaceStaminaModifier = paceStaminaModifiers[t2Pace]
-    t1OffensiveFormation = str(t1Gameplan_df["offensive_formation"].iloc[0] or "Balanced").strip()
-    t2OffensiveFormation = str(t2Gameplan_df["offensive_formation"].iloc[0] or "Balanced").strip()
-    t1DefensiveFormation = str(t1Gameplan_df["defensive_formation"].iloc[0] or "Man-to-Man").strip()
-    t2DefensiveFormation = str(t2Gameplan_df["defensive_formation"].iloc[0] or "Man-to-Man").strip()
-    t1FocusPlayerRaw = t1Gameplan_df["focus_player"].iloc[0]
-    t2FocusPlayerRaw = t2Gameplan_df["focus_player"].iloc[0]
-    t1FocusPlayerId = int(t1FocusPlayerRaw) if not pd.isna(t1FocusPlayerRaw) and str(t1FocusPlayerRaw).strip().isdigit() and int(t1FocusPlayerRaw) > 0 else None
-    t2FocusPlayerId = int(t2FocusPlayerRaw) if not pd.isna(t2FocusPlayerRaw) and str(t2FocusPlayerRaw).strip().isdigit() and int(t2FocusPlayerRaw) > 0 else None
-    if t1OffensiveFormation not in offensiveFormationDestinationWeights or t2OffensiveFormation not in offensiveFormationDestinationWeights:
-        raise ValueError("Offensive formation must be Balanced, Motion, Pick-and-Roll, Post-Up, or Space-and-Post.")
-    if t1DefensiveFormation not in defensiveFormationDestinationWeights or t2DefensiveFormation not in defensiveFormationDestinationWeights:
-        raise ValueError("Defensive formation must be Man-to-Man, 1-3-1 Zone, 3-2 Zone, 2-3 Zone, or Box-and-One Zone.")
-    t1FormationDestinationWeights = {zone:offensiveFormationDestinationWeights[t1OffensiveFormation][zone] * defensiveFormationDestinationWeights[t2DefensiveFormation][zone] for zone in ("inside","midrange","three")}
-    t2FormationDestinationWeights = {zone:offensiveFormationDestinationWeights[t2OffensiveFormation][zone] * defensiveFormationDestinationWeights[t1DefensiveFormation][zone] for zone in ("inside","midrange","three")}
-    t1FormationOffensiveReboundAdjustment = offensiveFormationReboundAdjustments[t1OffensiveFormation] + defensiveFormationOffensiveReboundAdjustments[t2DefensiveFormation]
-    t2FormationOffensiveReboundAdjustment = offensiveFormationReboundAdjustments[t2OffensiveFormation] + defensiveFormationOffensiveReboundAdjustments[t1DefensiveFormation]
-    paceActionTimeCategories = list(paceActionTimeModifiers.keys())
-    t1ExpectedActionTimeModifier = sum(paceActionTimeModifiers[category] * weight for category,weight in zip(paceActionTimeCategories,paceActionTimeWeights[t1Pace])) / sum(paceActionTimeWeights[t1Pace])
-    t2ExpectedActionTimeModifier = sum(paceActionTimeModifiers[category] * weight for category,weight in zip(paceActionTimeCategories,paceActionTimeWeights[t2Pace])) / sum(paceActionTimeWeights[t2Pace])
-    t1roster_df["base_stamina"] = t1roster_df["stamina"].astype(float)
-    t2roster_df["base_stamina"] = t2roster_df["stamina"].astype(float)
-    t1roster_df["stamina"] = t1roster_df["base_stamina"] * t1PaceStaminaModifier
-    t2roster_df["stamina"] = t2roster_df["base_stamina"] * t2PaceStaminaModifier
-
-    t1teamstats = pd.DataFrame().assign(id=t1team_df['id'], Team=t1team_df['abbr'])
-    t1teamstats['Assist'] = 0
-    t1teamstats['Ins Shot Att'] = 0
-    t1teamstats['Ins Shot Made'] = 0
-    t1teamstats['Ins Shot %'] = 0
-    t1teamstats['Mid Shot Att'] = 0
-    t1teamstats['Mid Shot Made'] = 0
-    t1teamstats['Mid Shot %'] = 0
-    t1teamstats['3PT Shot Att'] = 0
-    t1teamstats['3PT Shot Made'] = 0
-    t1teamstats['3PT Shot %'] = 0
-    t1teamstats['FT Shot Att'] = 0
-    t1teamstats['FT Shot Made'] = 0
-    t1teamstats['FT Shot %'] = 0
-    t1teamstats['OREB'] = 0
-    t1teamstats['DREB'] = 0
-    t1teamstats['Stl'] = 0
-    t1teamstats['Blk'] = 0
-    t1teamstats['TO'] = 0
-    t1teamstats['Foul'] = 0
-    t1teamstats['Poss'] = 0
-    t1teamstats['TOP'] = "00:00.0"
-    t1teamstats['Pts'] = 0
-    t1teamstats.set_index('id', inplace=True)
-
-    t1teamscore = pd.DataFrame().assign(id=t1team_df['id'], Team=t1team_df['abbr'])
-    t1teamscore['P1'] = 0
-    t1teamscore['P2'] = 0
-    t1teamscore['P3'] = 0
-    t1teamscore['P4'] = 0
-    t1teamscore['OT'] = 0
-    t1teamscore.set_index('id', inplace=True)
-
-    t2teamstats = pd.DataFrame().assign(id=t2team_df['id'], Team=t2team_df['abbr'])
-    t2teamstats['Assist'] = 0
-    t2teamstats['Ins Shot Att'] = 0
-    t2teamstats['Ins Shot Made'] = 0
-    t2teamstats['Ins Shot %'] = 0
-    t2teamstats['Mid Shot Att'] = 0
-    t2teamstats['Mid Shot Made'] = 0
-    t2teamstats['Mid Shot %'] = 0
-    t2teamstats['3PT Shot Att'] = 0
-    t2teamstats['3PT Shot Made'] = 0
-    t2teamstats['3PT Shot %'] = 0
-    t2teamstats['FT Shot Att'] = 0
-    t2teamstats['FT Shot Made'] = 0
-    t2teamstats['FT Shot %'] = 0
-    t2teamstats['OREB'] = 0
-    t2teamstats['DREB'] = 0
-    t2teamstats['Stl'] = 0
-    t2teamstats['Blk'] = 0
-    t2teamstats['TO'] = 0
-    t2teamstats['Foul'] = 0
-    t2teamstats['Poss'] = 0
-    t2teamstats['TOP'] = "00:00.0"
-    t2teamstats['Pts'] = 0
-    t2teamstats.set_index('id', inplace=True)
-
-    t2teamscore = pd.DataFrame().assign(id=t2team_df['id'], Team=t2team_df['abbr'])
-    t2teamscore['P1'] = 0
-    t2teamscore['P2'] = 0
-    t2teamscore['P3'] = 0
-    t2teamscore['P4'] = 0
-    t2teamscore['OT'] = 0
-    t2teamscore.set_index('id', inplace=True)
-
-    t1StealProbability = stealProbability
-    t1OtherTurnoverProbability = otherTurnoverProbability
-    t1MoveAttemptProbability = moveAttemptProbability
-    t1PassAttemptProbability = passAttemptProbability
-    t1ShotAttemptProbability = shotAttemptProbability
-
-    t2StealProbability = stealProbability
-    t2OtherTurnoverProbability = otherTurnoverProbability
-    t2MoveAttemptProbability = moveAttemptProbability
-    t2PassAttemptProbability = passAttemptProbability
-    t2ShotAttemptProbability = shotAttemptProbability
-
-    t1Probabilities = {
-        "steal": t1StealProbability,
-        "other_turnover": t1OtherTurnoverProbability,
-        "move": t1MoveAttemptProbability,
-        "pass": t1PassAttemptProbability,
-        "shot": t1ShotAttemptProbability,
+    _FOOTER = {
+        (
+            -4,
+            1,
+        ): "|x        |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |         |",
+        (
+            -3,
+            1,
+        ): "|  x      |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |         |",
+        (
+            -2,
+            1,
+        ): "|    x    |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |         |",
+        (
+            -1,
+            1,
+        ): "|      x  |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |         |",
+        (
+            0,
+            1,
+        ): "|         x         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |         |",
+        (
+            1,
+            1,
+        ): "|         |  x      |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |         |",
+        (
+            2,
+            1,
+        ): "|         |    x    |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |         |",
+        (
+            3,
+            1,
+        ): "|         |      x  |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |         |",
+        (
+            4,
+            1,
+        ): "|         |        x|\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |         |",
+        (
+            -4,
+            2,
+        ): "|         |         |\n|x        |         |\n|-O       |       O-|\n|         |         |\n|         |         |",
+        (
+            -3,
+            2,
+        ): "|         |         |\n|  x      |         |\n|-O       |       O-|\n|         |         |\n|         |         |",
+        (
+            -2,
+            2,
+        ): "|         |         |\n|    x    |         |\n|-O       |       O-|\n|         |         |\n|         |         |",
+        (
+            -1,
+            2,
+        ): "|         |         |\n|      x  |         |\n|-O       |       O-|\n|         |         |\n|         |         |",
+        (
+            0,
+            2,
+        ): "|         |         |\n|         x         |\n|-O       |       O-|\n|         |         |\n|         |         |",
+        (
+            1,
+            2,
+        ): "|         |         |\n|         |  x      |\n|-O       |       O-|\n|         |         |\n|         |         |",
+        (
+            2,
+            2,
+        ): "|         |         |\n|         |    x    |\n|-O       |       O-|\n|         |         |\n|         |         |",
+        (
+            3,
+            2,
+        ): "|         |         |\n|         |      x  |\n|-O       |       O-|\n|         |         |\n|         |         |",
+        (
+            4,
+            2,
+        ): "|         |         |\n|         |        x|\n|-O       |       O-|\n|         |         |\n|         |         |",
+        (
+            -4,
+            3,
+        ): "|         |         |\n|         |         |\n|-x       |       O-|\n|         |         |\n|         |         |",
+        (
+            -3,
+            3,
+        ): "|         |         |\n|         |         |\n|-Ox      |       O-|\n|         |         |\n|         |         |",
+        (
+            -2,
+            3,
+        ): "|         |         |\n|         |         |\n|-O  x    |       O-|\n|         |         |\n|         |         |",
+        (
+            -1,
+            3,
+        ): "|         |         |\n|         |         |\n|-O    x  |       O-|\n|         |         |\n|         |         |",
+        (
+            0,
+            3,
+        ): "|         |         |\n|         |         |\n|-O       x       O-|\n|         |         |\n|         |         |",
+        (
+            1,
+            3,
+        ): "|         |         |\n|         |         |\n|-O       |  x    O-|\n|         |         |\n|         |         |",
+        (
+            2,
+            3,
+        ): "|         |         |\n|         |         |\n|-O       |    x  O-|\n|         |         |\n|         |         |",
+        (
+            3,
+            3,
+        ): "|         |         |\n|         |         |\n|-O       |      xO-|\n|         |         |\n|         |         |",
+        (
+            4,
+            3,
+        ): "|         |         |\n|         |         |\n|-O       |       x-|\n|         |         |\n|         |         |",
+        (
+            -4,
+            4,
+        ): "|         |         |\n|         |         |\n|-O       |       O-|\n|x        |         |\n|         |         |",
+        (
+            -3,
+            4,
+        ): "|         |         |\n|         |         |\n|-O       |       O-|\n|  x      |         |\n|         |         |",
+        (
+            -2,
+            4,
+        ): "|         |         |\n|         |         |\n|-O       |       O-|\n|    x    |         |\n|         |         |",
+        (
+            -1,
+            4,
+        ): "|         |         |\n|         |         |\n|-O       |       O-|\n|      x  |         |\n|         |         |",
+        (
+            0,
+            4,
+        ): "|         |         |\n|         |         |\n|-O       |       O-|\n|         x         |\n|         |         |",
+        (
+            1,
+            4,
+        ): "|         |         |\n|         |         |\n|-O       |       O-|\n|         |  x      |\n|         |         |",
+        (
+            2,
+            4,
+        ): "|         |         |\n|         |         |\n|-O       |       O-|\n|         |    x    |\n|         |         |",
+        (
+            3,
+            4,
+        ): "|         |         |\n|         |         |\n|-O       |       O-|\n|         |      x  |\n|         |         |",
+        (
+            4,
+            4,
+        ): "|         |         |\n|         |         |\n|-O       |       O-|\n|         |        x|\n|         |         |",
+        (
+            -4,
+            5,
+        ): "|         |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|x        |         |",
+        (
+            -3,
+            5,
+        ): "|         |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|  x      |         |",
+        (
+            -2,
+            5,
+        ): "|         |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|    x    |         |",
+        (
+            -1,
+            5,
+        ): "|         |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|      x  |         |",
+        (
+            0,
+            5,
+        ): "|         |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         x         |",
+        (
+            1,
+            5,
+        ): "|         |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |  x      |",
+        (
+            2,
+            5,
+        ): "|         |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |    x    |",
+        (
+            3,
+            5,
+        ): "|         |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |      x  |",
+        (
+            4,
+            5,
+        ): "|         |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |        x|",
     }
 
-    t2Probabilities = {
-        "steal": t2StealProbability,
-        "other_turnover": t2OtherTurnoverProbability,
-        "move": t2MoveAttemptProbability,
-        "pass": t2PassAttemptProbability,
-        "shot": t2ShotAttemptProbability,
-    }
-
-    t1Players, t2Players = getPlayers(t1Lineup_df,t2Lineup_df)
-
-    t1FoulProtection = {"enabled":int(t1Gameplan_df["trigger1_enabled"].iloc[0] or 0),"type":int(t1Gameplan_df["trigger1_type"].iloc[0] or 0),"value":int(t1Gameplan_df["trigger1_value"].iloc[0] or 0)}
-    t2FoulProtection = {"enabled":int(t2Gameplan_df["trigger1_enabled"].iloc[0] or 0),"type":int(t2Gameplan_df["trigger1_type"].iloc[0] or 0),"value":int(t2Gameplan_df["trigger1_value"].iloc[0] or 0)}
-    t1TimeoutGameplan = {"preserve":int(t1Gameplan_df["preserve_timeouts"].iloc[0] or 0),"trigger2_enabled":int(t1Gameplan_df["trigger2_enabled"].iloc[0] or 0),"trigger2_value":int(t1Gameplan_df["trigger2_value"].iloc[0] or 0),"trigger3_enabled":int(t1Gameplan_df["trigger3_enabled"].iloc[0] or 0),"trigger3_value":int(t1Gameplan_df["trigger3_value"].iloc[0] or 0),"trigger3_exhaustion":int(t1Gameplan_df["trigger3_exhaustion"].iloc[0] or 0),"trigger4_enabled":int(t1Gameplan_df["trigger4_enabled"].iloc[0] or 0),"trigger4_value":int(t1Gameplan_df["trigger4_value"].iloc[0] or 0)}
-    t2TimeoutGameplan = {"preserve":int(t2Gameplan_df["preserve_timeouts"].iloc[0] or 0),"trigger2_enabled":int(t2Gameplan_df["trigger2_enabled"].iloc[0] or 0),"trigger2_value":int(t2Gameplan_df["trigger2_value"].iloc[0] or 0),"trigger3_enabled":int(t2Gameplan_df["trigger3_enabled"].iloc[0] or 0),"trigger3_value":int(t2Gameplan_df["trigger3_value"].iloc[0] or 0),"trigger3_exhaustion":int(t2Gameplan_df["trigger3_exhaustion"].iloc[0] or 0),"trigger4_enabled":int(t2Gameplan_df["trigger4_enabled"].iloc[0] or 0),"trigger4_value":int(t2Gameplan_df["trigger4_value"].iloc[0] or 0)}
-
-    t1RosterById = indexRoster(t1roster_df)
-    t2RosterById = indexRoster(t2roster_df)
-
-    t1RecoveryMinutes = {int(playerId): 0.0 for playerId in t1RosterById.index}
-    t2RecoveryMinutes = {int(playerId): 0.0 for playerId in t2RosterById.index}
-    t1FoulProtectionBench = set()
-    t2FoulProtectionBench = set()
-    t1PlayerHalfFouls = {}
-    t2PlayerHalfFouls = {}
-    momentum = 0.0
-    teamTimeoutsRemaining = {t1:(4 if league == "CBB" else 7),t2:(4 if league == "CBB" else 7)}
-    teamTimeoutTriggerLatches = {t1:{"trigger2":False,"trigger3":False,"trigger4":False},t2:{"trigger2":False,"trigger3":False,"trigger4":False}}
-    teamTimeoutPreservationAnnounced = {t1:False,t2:False}
-    teamTimeoutBlockedUntilLiveAction = False
-
-    t1onCourt = []
-    t2onCourt = []
-
-    def getActiveLineupPreferences(onCourt):
-        if not onCourt:
-            return {"inside":lineupPreferenceNeutralShare,"midrange":lineupPreferenceNeutralShare,"three":lineupPreferenceNeutralShare}
-        return {"inside":sum(float(player["inside_preference"]) for player in onCourt.values()) / len(onCourt),"midrange":sum(float(player["midrange_preference"]) for player in onCourt.values()) / len(onCourt),"three":sum(float(player["three_preference"]) for player in onCourt.values()) / len(onCourt)}
-
-    def getActiveDestinationWeights(onCourt,formationDestinationWeights):
-        lineupPreferences = getActiveLineupPreferences(onCourt)
-        preferenceWeights = {}
-        for zone in ("inside","midrange","three"):
-            preferenceWeight = (lineupPreferences[zone] / lineupPreferenceNeutralShare) ** lineupPreferenceDestinationStrength if lineupPreferences[zone] > 0 else lineupPreferenceDestinationMinimum
-            preferenceWeights[zone] = max(lineupPreferenceDestinationMinimum,min(lineupPreferenceDestinationMaximum,preferenceWeight))
-        return {zone:formationDestinationWeights[zone] * preferenceWeights[zone] for zone in ("inside","midrange","three")},lineupPreferences
-
-    def getPreferenceZone(shotZone):
-        if shotZone in ("inside","paint"):
-            return "inside"
-        if shotZone == "midrange":
-            return "midrange"
-        if shotZone in ("three","corner_three"):
-            return "three"
-        return None
-
-    def foulProtectionActive():
-        if period > periodPerGame:
-            return False
-        if period == periodPerGame and currTime <= 120:
-            return False
-        return True
-
-    def registerFoulProtection(teamNumber,playerStatId,playerId,playerLabel):
-        if teamNumber == 1:
-            protection = t1FoulProtection
-            halfFouls = t1PlayerHalfFouls
-            protectionBench = t1FoulProtectionBench
-        else:
-            protection = t2FoulProtection
-            halfFouls = t2PlayerHalfFouls
-            protectionBench = t2FoulProtectionBench
-
-        if league == "CBB":
-            halfNumber = 1 if period == 1 else 2
-        else:
-            halfNumber = 1 if period <= 2 else 2
-
-        foulKey = (halfNumber,int(playerId))
-        halfFouls[foulKey] = halfFouls.get(foulKey,0) + 1
-
-        if not foulProtectionActive() or protection["enabled"] != 1:
-            return False
-
-        if protection["type"] == 1:
-            threshold = 2
-            playerProtected = int(playerStatId) == protection["value"]
-        elif protection["type"] == 2:
-            threshold = protection["value"]
-            playerProtected = threshold >= 1
-        else:
-            return False
-
-        if not playerProtected or halfFouls[foulKey] < threshold or int(playerId) in protectionBench:
-            return False
-
-        protectionBench.add(int(playerId))
-        print(f"Foul Protection: {playerLabel} has {halfFouls[foulKey]} fouls in this half and will remain on the bench until the next half.")
-        return True
-
-    def pullSubs(starters,protectedPlayer=None):
-        t1ProtectedPlayerId = None
-        t1ProtectedSlot = None
-        t1ProtectedSourceSlot = None
-        t2ProtectedPlayerId = None
-        t2ProtectedSlot = None
-        t2ProtectedSourceSlot = None
-
-        if protectedPlayer is not None:
-            protectedPlayerId = int(protectedPlayer["player_id"])
-            t1ProtectedSlot = getOnCourtSlot(protectedPlayer,t1onCourt)
-            t2ProtectedSlot = getOnCourtSlot(protectedPlayer,t2onCourt)
-
-            if t1ProtectedSlot is not None:
-                t1ProtectedPlayerId = protectedPlayerId
-                t1ProtectedSourceSlot = protectedPlayer.get("lineup_source_slot")
-                t2ProtectedSlot = None
-            elif t2ProtectedSlot is not None:
-                t2ProtectedPlayerId = protectedPlayerId
-                t2ProtectedSourceSlot = protectedPlayer.get("lineup_source_slot")
-                t1ProtectedSlot = None
-            else:
-                raise ValueError(f"Protected player ID {protectedPlayerId} is not currently on the court.")
-
-        t1ExcludedPlayerIds = set(t1FouledOutPlayerIds)
-        t2ExcludedPlayerIds = set(t2FouledOutPlayerIds)
-        if foulProtectionActive():
-            t1ExcludedPlayerIds.update(t1FoulProtectionBench)
-            t2ExcludedPlayerIds.update(t2FoulProtectionBench)
-
-        newT1OnCourt,newT2OnCourt,newLineupParameters = setLineups(
-            t1Players=t1Players,
-            t2Players=t2Players,
-            t1RosterById=t1RosterById,
-            t2RosterById=t2RosterById,
-            t1Probabilities=t1Probabilities,
-            t2Probabilities=t2Probabilities,
-            HCAAdj=HCAAdj,
-            forceStarters=starters,
-            t1ExcludedPlayerIds=t1ExcludedPlayerIds,
-            t2ExcludedPlayerIds=t2ExcludedPlayerIds,
-            t1ProtectedPlayerId=t1ProtectedPlayerId,
-            t1ProtectedSlot=t1ProtectedSlot,
-            t2ProtectedPlayerId=t2ProtectedPlayerId,
-            t2ProtectedSlot=t2ProtectedSlot,
-            t1ProtectedSourceSlot=t1ProtectedSourceSlot,
-            t2ProtectedSourceSlot=t2ProtectedSourceSlot,
-        )
-        newLineupParameters["t1OffensiveRebound"] = max(0.0,min(1.0,newLineupParameters["t1OffensiveRebound"] + t1FormationOffensiveReboundAdjustment))
-        newLineupParameters["t2OffensiveRebound"] = max(0.0,min(1.0,newLineupParameters["t2OffensiveRebound"] + t2FormationOffensiveReboundAdjustment))
-        return newT1OnCourt,newT2OnCourt,newLineupParameters
-
-    def pullFreeThrowSubs(protectedPlayer):
-        nonlocal t1onCourt,t2onCourt,lineupParameters
-        t1onCourt,t2onCourt,lineupParameters = pullSubs(False,protectedPlayer)
-        print(t1 + " Free Throw Subs:")
-        for lineupPlayer in t1onCourt.values():
-            print(lineupPlayer["position"] + " " + lineupPlayer["first_name"] + " " + lineupPlayer["last_name"])
-        print(t2 + " Free Throw Subs:")
-        for lineupPlayer in t2onCourt.values():
-            print(lineupPlayer["position"] + " " + lineupPlayer["first_name"] + " " + lineupPlayer["last_name"])
-
-    def adjustMomentum(momentumTeam,momentumAmount,momentumReason):
-        nonlocal momentum
-        oldMomentum = momentum
-        momentumDirection = -1.0 if momentumTeam == t1 else 1.0
-        momentum = max(-1.0,min(1.0,momentum + (momentumDirection * float(momentumAmount))))
-        print(f"Momentum event: {momentumReason} | {oldMomentum:+.2f} -> {momentum:+.2f}")
-
-    def dampenMomentum(momentumRetention,momentumReason):
-        nonlocal momentum
-        oldMomentum = momentum
-        momentum = max(-1.0,min(1.0,momentum * float(momentumRetention)))
-        print(f"Momentum slowdown: {momentumReason} | {oldMomentum:+.2f} -> {momentum:+.2f}")
-
-    def printMomentumMeter():
-        momentumPosition = max(0,min(10,int(round((momentum + 1.0) * 5.0))))
-        momentumSlots = ["-"] * 11
-        momentumSlots[momentumPosition] = "x"
-        if momentum < 0:
-            momentumTeam = t1
-            momentumStrength = abs(momentum)
-        elif momentum > 0:
-            momentumTeam = t2
-            momentumStrength = momentum
-        else:
-            momentumTeam = "Neutral"
-            momentumStrength = 0.0
-        print(t1 + " |" + "".join(momentumSlots) + "| "+ t2 + f"  Momentum: {momentumTeam} {momentumStrength:.0%}")
-
-    def getMomentumAdjustedRating(staminaAdjustedRating,ratingTeam):
-        if ratingTeam == t1:
-            momentumStrength = max(0.0,-momentum)
-        elif ratingTeam == t2:
-            momentumStrength = max(0.0,momentum)
-        else:
-            momentumStrength = 0.0
-        momentumBonus = momentumStrength * momentumMaximumAttributeBonus
-        momentumModifier = 1.0 + momentumBonus
-        momentumAdjustedRating = float(staminaAdjustedRating) * momentumModifier
-        return momentumAdjustedRating,momentumStrength,momentumBonus,momentumModifier
-
-    def addPlayingTime(elapsedTime):
-        elapsedTime = round(float(elapsedTime), 2)
-        if elapsedTime <= 0:
-            return
-        for player in t1onCourt.values():
-            playerId = player["id"].item()
-            t1stats.at[playerId, "MP"] += elapsedTime
-        for player in t2onCourt.values():
-            playerId = player["id"].item()
-            t2stats.at[playerId, "MP"] += elapsedTime
-
-    def applyFatigueRecovery(recoveryAmount,recoveryLabel):
-        recoveryAmount = max(0.0,float(recoveryAmount))
-
-        for playerId in t1RecoveryMinutes:
-            statId = t1RosterById.at[playerId,"id"]
-            minutesPlayed = float(t1stats.at[statId,"MP"]) / 60
-            t1RecoveryMinutes[playerId] = min(minutesPlayed,t1RecoveryMinutes[playerId] + recoveryAmount)
-
-        for playerId in t2RecoveryMinutes:
-            statId = t2RosterById.at[playerId,"id"]
-            minutesPlayed = float(t2stats.at[statId,"MP"]) / 60
-            t2RecoveryMinutes[playerId] = min(minutesPlayed,t2RecoveryMinutes[playerId] + recoveryAmount)
-
-        print(f"{recoveryLabel}: all players receive up to {recoveryAmount:.2f} minutes of fatigue recovery.")
-
-    def completeMediaTimeout(mediaTimeoutLabel,protectedPlayer=None):
-        nonlocal t1onCourt,t2onCourt,lineupParameters,teamTimeoutBlockedUntilLiveAction
-        print(f"{mediaTimeoutLabel} at {int(currTime // 60):02d}:{currTime % 60:04.1f}.")
-        applyFatigueRecovery(mediaTimeoutRecoveryMinutes,"Media-timeout breather")
-        dampenMomentum(momentumMediaTimeoutRetention,"media timeout")
-        t1onCourt,t2onCourt,lineupParameters = pullSubs(False,protectedPlayer)
-        teamTimeoutBlockedUntilLiveAction = True
-        print(t1 + " Media Timeout Subs:")
-        for i in list(t1onCourt.values()):
-            print(i["position"] + " " + i["first_name"] + " " + i["last_name"])
-        print(t2 + " Media Timeout Subs:")
-        for i in list(t2onCourt.values()):
-            print(i["position"] + " " + i["first_name"] + " " + i["last_name"])
-
-    def convertTeamTimeoutToMediaTimeout(protectedPlayer=None):
-        if period > periodPerGame:
-            return False
-        if league == "CBB":
-            for mediaTimeoutMark in cbbMediaTimeoutMarks:
-                if mediaTimeoutMark not in cbbMediaTimeoutsTaken[period] and mediaTimeoutMark <= currTime <= mediaTimeoutMark + 30:
-                    cbbMediaTimeoutsTaken[period].add(mediaTimeoutMark)
-                    completeMediaTimeout(f"Under-{int(mediaTimeoutMark / 60)} media timeout converted from a team timeout",protectedPlayer)
-                    return True
-        else:
-            if nbaTimeoutEventsByPeriod[period] == 0 and 420 <= currTime <= 450:
-                nbaTimeoutEventsByPeriod[period] = 1
-                completeMediaTimeout("Under-7 mandatory media timeout converted from a team timeout",protectedPlayer)
-                return True
-            if nbaTimeoutEventsByPeriod[period] == 1 and 180 <= currTime <= 210:
-                nbaTimeoutEventsByPeriod[period] = 2
-                completeMediaTimeout("Under-3 mandatory media timeout converted from a team timeout",protectedPlayer)
-                return True
-        return False
-
-    def checkMediaTimeout(protectedPlayer=None):
-        nonlocal t1onCourt, t2onCourt, lineupParameters
-        if period > periodPerGame:
-            return False
-
-        mediaTimeoutLabel = None
-
-        if league == "CBB":
-            for mediaTimeoutMark in cbbMediaTimeoutMarks:
-                if currTime < mediaTimeoutMark and mediaTimeoutMark not in cbbMediaTimeoutsTaken[period]:
-                    cbbMediaTimeoutsTaken[period].add(mediaTimeoutMark)
-                    mediaTimeoutLabel = f"Under-{int(mediaTimeoutMark / 60)} media timeout"
-                    break
-        else:
-            if currTime < 420 and nbaTimeoutEventsByPeriod[period] == 0:
-                nbaTimeoutEventsByPeriod[period] += 1
-                mediaTimeoutLabel = "Under-7 mandatory media timeout"
-            elif currTime < 180 and nbaTimeoutEventsByPeriod[period] == 1:
-                nbaTimeoutEventsByPeriod[period] += 1
-                mediaTimeoutLabel = "Under-3 mandatory media timeout"
-
-        if mediaTimeoutLabel is None:
-            return False
-
-        completeMediaTimeout(mediaTimeoutLabel,protectedPlayer)
-        return True
-
-    def getPlayerExhaustionPercent(player,team):
-        playerStatId = int(player["id"])
-        playerMinutes = float((t1stats if team == t1 else t2stats).at[playerStatId,"MP"]) / 60
-        playerRecoveryMinutes = getPlayerRecoveryMinutes(player)
-        staminaCapacity = max(1.0,float(player["stamina"]))
-        return max(0.0,(playerMinutes - playerRecoveryMinutes) / staminaCapacity * 100)
-
-    def getTeamTimeoutConditions(timeoutTeam):
-        gameplan = t1TimeoutGameplan if timeoutTeam == t1 else t2TimeoutGameplan
-        onCourt = t1onCourt if timeoutTeam == t1 else t2onCourt
-        opponentPoints = t2pts if timeoutTeam == t1 else t1pts
-        teamPoints = t1pts if timeoutTeam == t1 else t2pts
-        opponentLead = opponentPoints - teamPoints
-        trigger2Active = gameplan["trigger2_enabled"] == 1 and opponentLead >= gameplan["trigger2_value"]
-        monitoredPlayer = next((player for player in onCourt.values() if int(player["id"]) == gameplan["trigger3_value"]),None)
-        monitoredExhaustion = getPlayerExhaustionPercent(monitoredPlayer,timeoutTeam) if monitoredPlayer is not None else 0.0
-        trigger3Active = gameplan["trigger3_enabled"] == 1 and monitoredPlayer is not None and monitoredExhaustion >= gameplan["trigger3_exhaustion"]
-        playerExhaustionValues = [getPlayerExhaustionPercent(player,timeoutTeam) for player in onCourt.values()]
-        averageExhaustion = sum(playerExhaustionValues) / len(playerExhaustionValues) if playerExhaustionValues else 0.0
-        trigger4Active = gameplan["trigger4_enabled"] == 1 and averageExhaustion >= gameplan["trigger4_value"]
-        conditions = {"trigger2":trigger2Active,"trigger3":trigger3Active,"trigger4":trigger4Active}
-        details = {"trigger2":f"opponent lead {opponentLead} points (threshold {gameplan['trigger2_value']})","trigger3":f"designated player exhaustion {monitoredExhaustion:.1f}% (threshold {gameplan['trigger3_exhaustion']}%)","trigger4":f"on-court average exhaustion {averageExhaustion:.1f}% (threshold {gameplan['trigger4_value']}%)"}
-        return conditions,details
-
-    def checkTeamTimeout(priorityTeam,allowNonPossession=False,protectedPlayer=None):
-        nonlocal t1onCourt,t2onCourt,lineupParameters,teamTimeoutBlockedUntilLiveAction
-        if priorityTeam not in (t1,t2):
-            return False
-        if teamTimeoutBlockedUntilLiveAction:
-            teamTimeoutBlockedUntilLiveAction = False
-            return False
-        timeoutCandidates = [priorityTeam]
-        if allowNonPossession:
-            timeoutCandidates.append(t2 if priorityTeam == t1 else t1)
-        for timeoutTeam in timeoutCandidates:
-            conditions,details = getTeamTimeoutConditions(timeoutTeam)
-            for triggerName,conditionActive in conditions.items():
-                if not conditionActive:
-                    teamTimeoutTriggerLatches[timeoutTeam][triggerName] = False
-            timeoutReasons = [details[triggerName] for triggerName,conditionActive in conditions.items() if conditionActive and not teamTimeoutTriggerLatches[timeoutTeam][triggerName]]
-            if teamTimeoutsRemaining[timeoutTeam] <= 0 or not timeoutReasons:
-                continue
-            timeoutGameplan = t1TimeoutGameplan if timeoutTeam == t1 else t2TimeoutGameplan
-            preserveFinalTimeout = timeoutGameplan["preserve"] == 1 and teamTimeoutsRemaining[timeoutTeam] == 1 and not (period > periodPerGame or (period == periodPerGame and currTime <= 120))
-            if preserveFinalTimeout:
-                if not teamTimeoutPreservationAnnounced[timeoutTeam]:
-                    print(f"{timeoutTeam} preserves its final timeout for the last two minutes. Automatic timeout triggers are temporarily blocked.")
-                    teamTimeoutPreservationAnnounced[timeoutTeam] = True
-                continue
-            if teamTimeoutPreservationAnnounced[timeoutTeam]:
-                print(f"{timeoutTeam} timeout preservation restriction has been removed.")
-                teamTimeoutPreservationAnnounced[timeoutTeam] = False
-            for triggerName,conditionActive in conditions.items():
-                if conditionActive:
-                    teamTimeoutTriggerLatches[timeoutTeam][triggerName] = True
-            print(f"{timeoutTeam} requests a timeout: " + "; ".join(timeoutReasons) + ".")
-            if convertTeamTimeoutToMediaTimeout(protectedPlayer):
-                print(f"The timeout is charged as a media timeout. {timeoutTeam} keeps all {teamTimeoutsRemaining[timeoutTeam]} team timeouts.")
-                return True
-            teamTimeoutsRemaining[timeoutTeam] -= 1
-            print(f"{timeoutTeam} TEAM TIMEOUT at {int(currTime // 60):02d}:{currTime % 60:04.1f}. Timeouts remaining: {teamTimeoutsRemaining[timeoutTeam]}.")
-            applyFatigueRecovery(teamTimeoutRecoveryMinutes,f"{timeoutTeam} team-timeout breather")
-            dampenMomentum(momentumTeamTimeoutRetention,f"{timeoutTeam} team timeout")
-            t1onCourt,t2onCourt,lineupParameters = pullSubs(False,protectedPlayer)
-            teamTimeoutBlockedUntilLiveAction = True
-            if league != "CBB" and period <= periodPerGame:
-                nbaTimeoutEventsByPeriod[period] = 2
-            print(t1 + " Team Timeout Subs:")
-            for lineupPlayer in t1onCourt.values():
-                print(lineupPlayer["position"] + " " + lineupPlayer["first_name"] + " " + lineupPlayer["last_name"])
-            print(t2 + " Team Timeout Subs:")
-            for lineupPlayer in t2onCourt.values():
-                print(lineupPlayer["position"] + " " + lineupPlayer["first_name"] + " " + lineupPlayer["last_name"])
-            return True
-        return False
-
-    def checkTimeoutStoppage(priorityTeam,allowNonPossession=False,protectedPlayer=None):
-        if checkMediaTimeout(protectedPlayer):
-            return True
-        return checkTeamTimeout(priorityTeam,allowNonPossession,protectedPlayer)
-
-    def getPlayerRecoveryMinutes(player):
-        playerId = int(player["player_id"])
-        if playerId in t1RecoveryMinutes:
-            return t1RecoveryMinutes[playerId]
-        if playerId in t2RecoveryMinutes:
-            return t2RecoveryMinutes[playerId]
-        return 0.0
-
-    t1onCourt, t2onCourt, lineupParameters = pullSubs(True)
-
-    t1TipChance = ((t1onCourt["c1"]["height"] - t2onCourt["c1"]["height"]) * 0.1) + 0.5
-    t2TipChance = 1 - t1TipChance
-
-    possTeam = "TIPOFF"
-    possPlayer = ""
-    assistPlayer = None
-    assistMovementCount = 0
-    defendedPlayerId = None
-    currentDefender = None
-    previousDefender = None
-    finalHeavePending = False
-    teamPossessions = {t1:0,t2:0}
-    teamPossessionTime = {t1:0.0,t2:0.0}
-    lastCountedPossessionTeam = None
-
-    while gameOn and periodOn:
+    while gs.gameOn and gs.periodOn:
         tipoffJustOccurred = False
+        footerPos = _FOOTER.get(gs.courtPos, "TIPOFF")
+        periodLabel = (
+            str(gs.period) + gs.pInd if gs.period <= gs.periodPerGame else "OT" + str(gs.period - gs.periodPerGame)
+        )
 
-        if courtPos == (-4, 1):
-            footerPos = "|x        |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (-3, 1):
-            footerPos = "|  x      |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (-2, 1):
-            footerPos = "|    x    |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (-1, 1):
-            footerPos = "|      x  |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (0, 1):
-            footerPos = "|         x         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (1, 1):
-            footerPos = "|         |  x      |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (2, 1):
-            footerPos = "|         |    x    |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (3, 1):
-            footerPos = "|         |      x  |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (4, 1):
-            footerPos = "|         |        x|\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (-4, 2):
-            footerPos = "|         |         |\n|x        |         |\n|-O       |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (-3, 2):
-            footerPos = "|         |         |\n|  x      |         |\n|-O       |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (-2, 2):
-            footerPos = "|         |         |\n|    x    |         |\n|-O       |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (-1, 2):
-            footerPos = "|         |         |\n|      x  |         |\n|-O       |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (0, 2):
-            footerPos = "|         |         |\n|         x         |\n|-O       |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (1, 2):
-            footerPos = "|         |         |\n|         |  x      |\n|-O       |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (2, 2):
-            footerPos = "|         |         |\n|         |    x    |\n|-O       |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (3, 2):
-            footerPos = "|         |         |\n|         |      x  |\n|-O       |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (4, 2):
-            footerPos = "|         |         |\n|         |        x|\n|-O       |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (-4, 3):
-            footerPos = "|         |         |\n|         |         |\n|-x       |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (-3, 3):
-            footerPos = "|         |         |\n|         |         |\n|-Ox      |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (-2, 3):
-            footerPos = "|         |         |\n|         |         |\n|-O  x    |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (-1, 3):
-            footerPos = "|         |         |\n|         |         |\n|-O    x  |       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (0, 3):
-            footerPos = "|         |         |\n|         |         |\n|-O       x       O-|\n|         |         |\n|         |         |"
-        elif courtPos == (1, 3):
-            footerPos = "|         |         |\n|         |         |\n|-O       |  x    O-|\n|         |         |\n|         |         |"
-        elif courtPos == (2, 3):
-            footerPos = "|         |         |\n|         |         |\n|-O       |    x  O-|\n|         |         |\n|         |         |"
-        elif courtPos == (3, 3):
-            footerPos = "|         |         |\n|         |         |\n|-O       |      xO-|\n|         |         |\n|         |         |"
-        elif courtPos == (4, 3):
-            footerPos = "|         |         |\n|         |         |\n|-O       |       x-|\n|         |         |\n|         |         |"
-        elif courtPos == (-4, 4):
-            footerPos = "|         |         |\n|         |         |\n|-O       |       O-|\n|x        |         |\n|         |         |"
-        elif courtPos == (-3, 4):
-            footerPos = "|         |         |\n|         |         |\n|-O       |       O-|\n|  x      |         |\n|         |         |"
-        elif courtPos == (-2, 4):
-            footerPos = "|         |         |\n|         |         |\n|-O       |       O-|\n|    x    |         |\n|         |         |"
-        elif courtPos == (-1, 4):
-            footerPos = "|         |         |\n|         |         |\n|-O       |       O-|\n|      x  |         |\n|         |         |"
-        elif courtPos == (0, 4):
-            footerPos = "|         |         |\n|         |         |\n|-O       |       O-|\n|         x         |\n|         |         |"
-        elif courtPos == (1, 4):
-            footerPos = "|         |         |\n|         |         |\n|-O       |       O-|\n|         |  x      |\n|         |         |"
-        elif courtPos == (2, 4):
-            footerPos = "|         |         |\n|         |         |\n|-O       |       O-|\n|         |    x    |\n|         |         |"
-        elif courtPos == (3, 4):
-            footerPos = "|         |         |\n|         |         |\n|-O       |       O-|\n|         |      x  |\n|         |         |"
-        elif courtPos == (4, 4):
-            footerPos = "|         |         |\n|         |         |\n|-O       |       O-|\n|         |        x|\n|         |         |"
-        elif courtPos == (-4, 5):
-            footerPos = "|         |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|x        |         |"
-        elif courtPos == (-3, 5):
-            footerPos = "|         |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|  x      |         |"
-        elif courtPos == (-2, 5):
-            footerPos = "|         |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|    x    |         |"
-        elif courtPos == (-1, 5):
-            footerPos = "|         |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|      x  |         |"
-        elif courtPos == (0, 5):
-            footerPos = "|         |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         x         |"
-        elif courtPos == (1, 5):
-            footerPos = "|         |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |  x      |"
-        elif courtPos == (2, 5):
-            footerPos = "|         |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |    x    |"
-        elif courtPos == (3, 5):
-            footerPos = "|         |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |      x  |"
-        elif courtPos == (4, 5):
-            footerPos = "|         |         |\n|         |         |\n|-O       |       O-|\n|         |         |\n|         |        x|"
-        else:
-            footerPos = "TIPOFF"
-
-        displayGameTime = max(0, math.ceil(currTime))
-        displayShotClock = max(0, math.ceil(currShotClock))
-
-        qtrminutes, qtrseconds = divmod(displayGameTime, 60)
-        qtrhours, qtrminutes = divmod(qtrminutes, 60)
-
-        shotminutes, shotseconds = divmod(displayShotClock, 60)
-        shothours, shotminutes = divmod(shotminutes, 60)
-
-        if possTeam == "TIPOFF":
+        if gs.possTeam == "TIPOFF":
             print("Game Starting\nT1 (Home): " + t1 + "\nT2 (Away): " + t2)
-            print(f"{t1} Pace: {t1Pace} | Available stamina modifier: {t1PaceStaminaModifier:.0%} | Expected action-time modifier: {t1ExpectedActionTimeModifier:.2f}")
-            print(f"{t2} Pace: {t2Pace} | Available stamina modifier: {t2PaceStaminaModifier:.0%} | Expected action-time modifier: {t2ExpectedActionTimeModifier:.2f}")
-            print(f"{t1} Formations: {t1OffensiveFormation} offense vs {t2DefensiveFormation} defense | Destination weights: inside {t1FormationDestinationWeights['inside']:.3f}, midrange {t1FormationDestinationWeights['midrange']:.3f}, three {t1FormationDestinationWeights['three']:.3f} | OREB adjustment: {t1FormationOffensiveReboundAdjustment:+.2%} | Opponent focus: {t2FocusPlayerId or 'none'}")
-            print(f"{t2} Formations: {t2OffensiveFormation} offense vs {t1DefensiveFormation} defense | Destination weights: inside {t2FormationDestinationWeights['inside']:.3f}, midrange {t2FormationDestinationWeights['midrange']:.3f}, three {t2FormationDestinationWeights['three']:.3f} | OREB adjustment: {t2FormationOffensiveReboundAdjustment:+.2%} | Opponent focus: {t1FocusPlayerId or 'none'}")
+            print(
+                f"{t1} Pace: {gs.t1Pace} | Available stamina modifier: {gs.t1PaceStaminaModifier:.0%} | Expected action-time modifier: {gs.t1ExpectedActionTimeModifier:.2f}"
+            )
+            print(
+                f"{t2} Pace: {gs.t2Pace} | Available stamina modifier: {gs.t2PaceStaminaModifier:.0%} | Expected action-time modifier: {gs.t2ExpectedActionTimeModifier:.2f}"
+            )
+            print(
+                f"{t1} Formations: {gs.t1OffensiveFormation} offense vs {gs.t2DefensiveFormation} defense | Destination weights: inside {gs.t1FormationDestinationWeights['inside']:.3f}, midrange {gs.t1FormationDestinationWeights['midrange']:.3f}, three {gs.t1FormationDestinationWeights['three']:.3f} | OREB adjustment: {gs.t1FormationOffensiveReboundAdjustment:+.2%} | Opponent focus: {gs.t2FocusPlayerId or 'none'}"
+            )
+            print(
+                f"{t2} Formations: {gs.t2OffensiveFormation} offense vs {gs.t1DefensiveFormation} defense | Destination weights: inside {gs.t2FormationDestinationWeights['inside']:.3f}, midrange {gs.t2FormationDestinationWeights['midrange']:.3f}, three {gs.t2FormationDestinationWeights['three']:.3f} | OREB adjustment: {gs.t2FormationOffensiveReboundAdjustment:+.2%} | Opponent focus: {gs.t1FocusPlayerId or 'none'}"
+            )
             print(t1 + " Starters:")
-            for i in list(t1onCourt.values()):
-                print(i['position'] + " " + i['first_name'] + " " + i['last_name'])
+            for p in gs.t1onCourt.values():
+                print(p['position'] + " " + p['first_name'] + " " + p['last_name'])
             print(t2 + " Starters:")
-            for i in list(t2onCourt.values()):
-                print(i['position'] + " " + i['first_name'] + " " + i['last_name'])
-            tipOff = random.random()
-            if tipOff < t1TipChance:
-                tippedTo = random.choice(list(t1onCourt.values()))
-                possPlayer = tippedTo
-                possTeam = t1
+            for p in gs.t2onCourt.values():
+                print(p['position'] + " " + p['first_name'] + " " + p['last_name'])
+            tipRoll = random.random()
+            if tipRoll < gs.t1TipChance:
+                gs.possPlayer = random.choice(list(gs.t1onCourt.values()))
+                gs.possTeam = t1
                 offense = t1
                 defense = t2
-                offense_df = t1onCourt
-                defense_df = t2onCourt
-                addPlayingTime(1)
-                currTime -= 1
-                print(str(t1onCourt["c1"]["position"]) + " " + str(t1onCourt["c1"]["first_name"])+ " " + str(t1onCourt["c1"]["last_name"]) + " wins the tipoff for " + t1 + ". " + possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " takes control of the ball.")
-                #print("Game Clock: " +game_clock_text + " / Shot Clock: "  + ":%02d" % (shotseconds))
-                tipoffJustOccurred = True
+                offense_df = gs.t1onCourt
+                defense_df = gs.t2onCourt
+                gs.addPlayingTime(1)
+                gs.currTime -= 1
+                print(
+                    str(gs.t1onCourt["c1"]["position"])
+                    + " "
+                    + str(gs.t1onCourt["c1"]["first_name"])
+                    + " "
+                    + str(gs.t1onCourt["c1"]["last_name"])
+                    + " wins the tipoff for "
+                    + t1
+                    + ". "
+                    + gs.possPlayer["position"]
+                    + " "
+                    + gs.possPlayer["first_name"]
+                    + " "
+                    + gs.possPlayer["last_name"]
+                    + " takes control of the ball."
+                )
             else:
-                tippedTo = random.choice(list(t2onCourt.values()))
-                possPlayer = tippedTo
-                possTeam = t2
+                gs.possPlayer = random.choice(list(gs.t2onCourt.values()))
+                gs.possTeam = t2
                 offense = t2
                 defense = t1
-                offense_df = t2onCourt
-                defense_df = t1onCourt
-                addPlayingTime(1)
-                currTime -= 1
-                print(str(t2onCourt["c1"]["position"]) + " " + str(t2onCourt["c1"]["first_name"])+ " " + str(t2onCourt["c1"]["last_name"]) + " wins the tipoff for " + t2 + ". " + possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " takes control of the ball.")
-                #print("Game Clock: " +game_clock_text + " / Shot Clock: "  + "%02d" % (shotseconds))
-                tipoffJustOccurred = True
+                offense_df = gs.t2onCourt
+                defense_df = gs.t1onCourt
+                gs.addPlayingTime(1)
+                gs.currTime -= 1
+                print(
+                    str(gs.t2onCourt["c1"]["position"])
+                    + " "
+                    + str(gs.t2onCourt["c1"]["first_name"])
+                    + " "
+                    + str(gs.t2onCourt["c1"]["last_name"])
+                    + " wins the tipoff for "
+                    + t2
+                    + ". "
+                    + gs.possPlayer["position"]
+                    + " "
+                    + gs.possPlayer["first_name"]
+                    + " "
+                    + gs.possPlayer["last_name"]
+                    + " takes control of the ball."
+                )
+            gs.teamPossessionTime[gs.possTeam] += 1.0
+            gs.pbp.append(gs.make_play(tipoff, tipoffHomeWin if gs.possTeam == t1 else tipoffAwayWin, elapsed=1))
+            tipoffJustOccurred = True
 
-        if possTeam == "OT_TIPOFF":
-            tipOff = random.random()
-            if tipOff < t1TipChance:
-                tippedTo = random.choice(list(t1onCourt.values()))
-                possPlayer = tippedTo
-                possTeam = t1
+        if gs.possTeam == "OT_TIPOFF":
+            tipRoll = random.random()
+            if tipRoll < gs.t1TipChance:
+                gs.possPlayer = random.choice(list(gs.t1onCourt.values()))
+                gs.possTeam = t1
                 offense = t1
                 defense = t2
-                offense_df = t1onCourt
-                defense_df = t2onCourt
-                addPlayingTime(1)
-                currTime -= 1
-                print(str(t1onCourt["c1"]["position"]) + " " + str(t1onCourt["c1"]["first_name"])+ " " + str(t1onCourt["c1"]["last_name"]) + " wins the tipoff for " + t1 + ". " + possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " takes control of the ball.")
-                #print("Game Clock: " +game_clock_text + " / Shot Clock: "  + ":%02d" % (shotseconds))
-                tipoffJustOccurred = True
+                offense_df = gs.t1onCourt
+                defense_df = gs.t2onCourt
+                gs.addPlayingTime(1)
+                gs.currTime -= 1
+                print(
+                    str(gs.t1onCourt["c1"]["position"])
+                    + " "
+                    + str(gs.t1onCourt["c1"]["first_name"])
+                    + " "
+                    + str(gs.t1onCourt["c1"]["last_name"])
+                    + " wins the tipoff for "
+                    + t1
+                    + ". "
+                    + gs.possPlayer["position"]
+                    + " "
+                    + gs.possPlayer["first_name"]
+                    + " "
+                    + gs.possPlayer["last_name"]
+                    + " takes control of the ball."
+                )
             else:
-                tippedTo = random.choice(list(t2onCourt.values()))
-                possPlayer = tippedTo
-                possTeam = t2
+                gs.possPlayer = random.choice(list(gs.t2onCourt.values()))
+                gs.possTeam = t2
                 offense = t2
                 defense = t1
-                offense_df = t2onCourt
-                defense_df = t1onCourt
-                addPlayingTime(1)
-                currTime -= 1
-                print(str(t2onCourt["c1"]["position"]) + " " + str(t2onCourt["c1"]["first_name"])+ " " + str(t2onCourt["c1"]["last_name"]) + " wins the tipoff for " + t2 + ". " + possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " takes control of the ball.")
-                #print("Game Clock: " +game_clock_text + " / Shot Clock: "  + "%02d" % (shotseconds))
-                tipoffJustOccurred = True
+                offense_df = gs.t2onCourt
+                defense_df = gs.t1onCourt
+                gs.addPlayingTime(1)
+                gs.currTime -= 1
+                print(
+                    str(gs.t2onCourt["c1"]["position"])
+                    + " "
+                    + str(gs.t2onCourt["c1"]["first_name"])
+                    + " "
+                    + str(gs.t2onCourt["c1"]["last_name"])
+                    + " wins the tipoff for "
+                    + t2
+                    + ". "
+                    + gs.possPlayer["position"]
+                    + " "
+                    + gs.possPlayer["first_name"]
+                    + " "
+                    + gs.possPlayer["last_name"]
+                    + " takes control of the ball."
+                )
+            gs.teamPossessionTime[gs.possTeam] += 1.0
+            gs.pbp.append(gs.make_play(ot_tipoff, tipoffHomeWin if gs.possTeam == t1 else tipoffAwayWin, elapsed=1))
+            tipoffJustOccurred = True
 
-        if possTeam == t1 or possTeam == t2:
-            if possTeam != lastCountedPossessionTeam:
-                teamPossessions[possTeam] += 1
-                lastCountedPossessionTeam = possTeam
+        if gs.possTeam == t1 or gs.possTeam == t2:
+            if gs.possTeam != gs.lastCountedPossessionTeam:
+                gs.teamPossessions[gs.possTeam] += 1
+                gs.lastCountedPossessionTeam = gs.possTeam
             if tipoffJustOccurred:
-                teamPossessionTime[possTeam] += 1.0
+                gs.teamPossessionTime[gs.possTeam] += 1.0
 
-            if possTeam == t1:
+            if gs.possTeam == t1:
                 offense = t1
                 defense = t2
-                offense_df = t1onCourt
-                defense_df = t2onCourt
+                offense_df = gs.t1onCourt
+                defense_df = gs.t2onCourt
                 team_side = "HOME"
-
                 actionParameters = {
-                    "steal_cutoff": lineupParameters["t1StealCutoff"],
-                    "turnover_cutoff": lineupParameters["t1TOCutoff"],
-                    "move_cutoff": lineupParameters["t1MoveCutoff"],
-                    "pass_cutoff": lineupParameters["t1PassCutoff"],
-                    "shot_cutoff": lineupParameters["t1ShotCutoff"],
+                    "steal_cutoff": gs.lineupParameters["t1StealCutoff"],
+                    "turnover_cutoff": gs.lineupParameters["t1TOCutoff"],
+                    "move_cutoff": gs.lineupParameters["t1MoveCutoff"],
+                    "pass_cutoff": gs.lineupParameters["t1PassCutoff"],
+                    "shot_cutoff": gs.lineupParameters["t1ShotCutoff"],
                 }
-
-            elif possTeam == t2:
+            else:
                 offense = t2
                 defense = t1
-                offense_df = t2onCourt
-                defense_df = t1onCourt
+                offense_df = gs.t2onCourt
+                defense_df = gs.t1onCourt
                 team_side = "AWAY"
-
                 actionParameters = {
-                    "steal_cutoff": lineupParameters["t2StealCutoff"],
-                    "turnover_cutoff": lineupParameters["t2TOCutoff"],
-                    "move_cutoff": lineupParameters["t2MoveCutoff"],
-                    "pass_cutoff": lineupParameters["t2PassCutoff"],
-                    "shot_cutoff": lineupParameters["t2ShotCutoff"],
+                    "steal_cutoff": gs.lineupParameters["t2StealCutoff"],
+                    "turnover_cutoff": gs.lineupParameters["t2TOCutoff"],
+                    "move_cutoff": gs.lineupParameters["t2MoveCutoff"],
+                    "pass_cutoff": gs.lineupParameters["t2PassCutoff"],
+                    "shot_cutoff": gs.lineupParameters["t2ShotCutoff"],
                 }
 
-            if not tipoffJustOccurred and checkTeamTimeout(possTeam,False,possPlayer):
-                defendedPlayerId = None
-                currentDefender = None
-                previousDefender = None
+            if not tipoffJustOccurred and gs.checkTeamTimeout(gs.possTeam, False, gs.possPlayer):
+                gs.defendedPlayerId = None
+                gs.currentDefender = None
+                gs.previousDefender = None
                 continue
 
             attemptFinalHeave = False
-            finalHeaveStartedAfterInbound = finalHeavePending
-            finalHeavePending = False
+            finalHeaveStartedAfterInbound = gs.finalHeavePending
+            gs.finalHeavePending = False
+            finalHeaveScoringDeficit = (gs.t2pts - gs.t1pts) if gs.possTeam == t1 else (gs.t1pts - gs.t2pts)
 
-            if possTeam == t1:
-                finalHeaveScoringDeficit = t2pts - t1pts
-            else:
-                finalHeaveScoringDeficit = t1pts - t2pts
-
-            if not tipoffJustOccurred and period >= periodPerGame and 0 < currTime <= finalHeaveMaximumTime and 0 <= finalHeaveScoringDeficit <= 3:
+            if (
+                not tipoffJustOccurred
+                and gs.period >= gs.periodPerGame
+                and 0 < gs.currTime <= finalHeaveMaximumTime
+                and 0 <= finalHeaveScoringDeficit <= 3
+            ):
                 if finalHeaveStartedAfterInbound:
-                    finalHeaveInbounder = possPlayer
-                    finalHeaveShooters = [player for player in offense_df.values() if int(player["player_id"]) != int(finalHeaveInbounder["player_id"])]
-
+                    finalHeaveInbounder = gs.possPlayer
+                    finalHeaveShooters = [
+                        p for p in offense_df.values() if int(p["ID"]) != int(finalHeaveInbounder["ID"])
+                    ]
                     if finalHeaveShooters:
-                        finalHeaveShooterWeights = [max(0.01,float(player["shooting3"]) * float(player["bbiq"])) for player in finalHeaveShooters]
-                        possPlayer = random.choices(finalHeaveShooters,weights=finalHeaveShooterWeights,k=1)[0]
-
-                    print(f"With {currTime:.1f} seconds remaining, {finalHeaveInbounder['position']} {finalHeaveInbounder['first_name']} {finalHeaveInbounder['last_name']} inbounds to {possPlayer['position']} {possPlayer['first_name']} {possPlayer['last_name']} for a final heave.")
+                        weights = [max(0.01, float(p["shooting3"]) * float(p["bbiq"])) for p in finalHeaveShooters]
+                        gs.possPlayer = random.choices(finalHeaveShooters, weights=weights, k=1)[0]
+                    print(
+                        f"With {gs.currTime:.1f} seconds remaining, {finalHeaveInbounder['position']} {finalHeaveInbounder['first_name']} {finalHeaveInbounder['last_name']} inbounds to {gs.possPlayer['position']} {gs.possPlayer['first_name']} {gs.possPlayer['last_name']} for a final heave."
+                    )
                 else:
-                    print(f"With {currTime:.1f} seconds remaining, {possPlayer['position']} {possPlayer['first_name']} {possPlayer['last_name']} recognizes the clock and prepares a final heave.")
-
+                    print(
+                        f"With {gs.currTime:.1f} seconds remaining, {gs.possPlayer['position']} {gs.possPlayer['first_name']} {gs.possPlayer['last_name']} recognizes the clock and prepares a final heave."
+                    )
                 attemptFinalHeave = True
 
-            possPlayerId = int(
-                possPlayer["id"]
-            )
+            possPlayerId = int(gs.possPlayer["id"])
+            if gs.defendedPlayerId != possPlayerId:
+                gs.previousDefender = gs.currentDefender
+                gs.currentDefender = selectDefender(
+                    gs.possPlayer, offense_df, defense_df, excluded_defender=gs.previousDefender
+                )
+                gs.defendedPlayerId = possPlayerId
+            defender = gs.currentDefender
 
-            if defendedPlayerId != possPlayerId:
-                previousDefender = currentDefender
-
-                if possTeam == t1:
-                    currentDefender = selectDefender(
-                        possPlayer,
-                        t1onCourt,
-                        t2onCourt,
-                        excluded_defender=previousDefender
-                    )
-                else:
-                    currentDefender = selectDefender(
-                        possPlayer,
-                        t2onCourt,
-                        t1onCourt,
-                        excluded_defender=previousDefender
-                    )
-
-                defendedPlayerId = possPlayerId
-
-            defender = currentDefender
-
-            offense_slot = getOnCourtSlot(
-                possPlayer,
-                offense_df
-            )
-
-            defense_slot = getOnCourtSlot(
-                defender,
-                defense_df
-            )
-
+            offense_slot = getOnCourtSlot(gs.possPlayer, offense_df)
+            defense_slot = getOnCourtSlot(defender, defense_df)
             print(
-                f"Matchup: "
-                f"{possPlayer['position']} "
-                f"{possPlayer['first_name']} "
-                f"{possPlayer['last_name']} "
-                f"({offense_slot}) vs "
-                f"{defender['position']} "
-                f"{defender['first_name']} "
-                f"{defender['last_name']} "
-                f"({defense_slot})"
+                f"Matchup: {gs.possPlayer['position']} {gs.possPlayer['first_name']} {gs.possPlayer['last_name']} ({offense_slot}) vs {defender['position']} {defender['first_name']} {defender['last_name']} ({defense_slot})"
             )
 
             baseStealProbability = actionParameters["steal_cutoff"]
             baseTurnoverProbability = actionParameters["turnover_cutoff"] - actionParameters["steal_cutoff"]
             baseMoveProbability = actionParameters["move_cutoff"] - actionParameters["turnover_cutoff"]
             basePassProbability = actionParameters["pass_cutoff"] - actionParameters["move_cutoff"]
-            baseShotProbability = max(0.0,1.0 - actionParameters["pass_cutoff"])
+            baseShotProbability = max(0.0, 1.0 - actionParameters["pass_cutoff"])
 
-            offensePace = t1Pace if offense == t1 else t2Pace
-            activeDefensiveFormation = t2DefensiveFormation if offense == t1 else t1DefensiveFormation
-            defensiveFocusPlayerId = t2FocusPlayerId if offense == t1 else t1FocusPlayerId
-            focusPlayerOnCourt = defensiveFocusPlayerId is not None and any(int(player["id"]) == defensiveFocusPlayerId for player in offense_df.values())
-            if activeDefensiveFormation in doubleTeamAdjustments and focusPlayerOnCourt:
-                doubleTeamRole = "focus" if int(possPlayer["id"]) == defensiveFocusPlayerId else "teammate"
-                doubleTeamShotAdjustment = doubleTeamAdjustments[activeDefensiveFormation][doubleTeamRole]["shot"]
-                doubleTeamMovementAdjustment = doubleTeamAdjustments[activeDefensiveFormation][doubleTeamRole]["movement"]
-                doubleTeamPassDeflectionAdjustment = doubleTeamAdjustments[activeDefensiveFormation][doubleTeamRole]["pass_deflection"]
+            offensePace = gs.t1Pace if offense == t1 else gs.t2Pace
+            activeDefensiveFormation = gs.t2DefensiveFormation if offense == t1 else gs.t1DefensiveFormation
+            defensiveFocusPlayerId = gs.t2FocusPlayerId if offense == t1 else gs.t1FocusPlayerId
+            focusPlayerOnCourt = defensiveFocusPlayerId is not None and any(
+                int(p["id"]) == defensiveFocusPlayerId for p in offense_df.values()
+            )
+            if activeDefensiveFormation in gs.doubleTeamAdjustments and focusPlayerOnCourt:
+                doubleTeamRole = "focus" if int(gs.possPlayer["id"]) == defensiveFocusPlayerId else "teammate"
+                doubleTeamShotAdjustment = gs.doubleTeamAdjustments[activeDefensiveFormation][doubleTeamRole]["shot"]
+                doubleTeamMovementAdjustment = gs.doubleTeamAdjustments[activeDefensiveFormation][doubleTeamRole][
+                    "movement"
+                ]
+                doubleTeamPassDeflectionAdjustment = gs.doubleTeamAdjustments[activeDefensiveFormation][doubleTeamRole][
+                    "pass_deflection"
+                ]
             else:
                 doubleTeamRole = "inactive"
                 doubleTeamShotAdjustment = 0.0
                 doubleTeamMovementAdjustment = 0.0
                 doubleTeamPassDeflectionAdjustment = 0.0
-            offenseShotClockUrgencyStart = paceShotClockUrgencyStarts[league][offensePace]
-            shotClockUrgencyProgress = max(0.0,min(1.0,(offenseShotClockUrgencyStart - currShotClock) / offenseShotClockUrgencyStart))
-            shotClockBBIQ = float(possPlayer["bbiq"])
+
+            offenseShotClockUrgencyStart = gs.paceShotClockUrgencyStarts[gs.league][offensePace]
+            shotClockUrgencyProgress = max(
+                0.0, min(1.0, (offenseShotClockUrgencyStart - gs.currShotClock) / offenseShotClockUrgencyStart)
+            )
+            shotClockBBIQ = float(gs.possPlayer["bbiq"])
             shotClockBBIQDifference = shotClockBBIQ - shotClockAwarenessAverageBBIQ
-            shotClockEffectiveBBIQDifference = max(-shotClockAwarenessMaximumBBIQGap,min(shotClockAwarenessMaximumBBIQGap,shotClockBBIQDifference))
+            shotClockEffectiveBBIQDifference = max(
+                -shotClockAwarenessMaximumBBIQGap, min(shotClockAwarenessMaximumBBIQGap, shotClockBBIQDifference)
+            )
             shotClockAwarenessModifier = 1.0 + (shotClockEffectiveBBIQDifference * shotClockAwarenessModifierPerPoint)
-            requestedShotClockUrgencyBonus = shotClockUrgencyMaximumBonus * (shotClockUrgencyProgress ** 2) * shotClockAwarenessModifier
-
-            availableMovePassProbability = max(0.0,baseMoveProbability + basePassProbability)
-            maximumShotClockTransfer = max(0.0,shotClockUrgencyMaximumShotProbability - baseShotProbability)
-            shotClockUrgencyTransfer = min(requestedShotClockUrgencyBonus,maximumShotClockTransfer,availableMovePassProbability)
-
-            if availableMovePassProbability > 0:
-                remainingMovePassScale = (availableMovePassProbability - shotClockUrgencyTransfer) / availableMovePassProbability
-            else:
-                remainingMovePassScale = 0.0
-
+            requestedShotClockUrgencyBonus = (
+                shotClockUrgencyMaximumBonus * (shotClockUrgencyProgress**2) * shotClockAwarenessModifier
+            )
+            availableMovePassProbability = max(0.0, baseMoveProbability + basePassProbability)
+            maximumShotClockTransfer = max(0.0, shotClockUrgencyMaximumShotProbability - baseShotProbability)
+            shotClockUrgencyTransfer = min(
+                requestedShotClockUrgencyBonus, maximumShotClockTransfer, availableMovePassProbability
+            )
+            remainingMovePassScale = (
+                (availableMovePassProbability - shotClockUrgencyTransfer) / availableMovePassProbability
+                if availableMovePassProbability > 0
+                else 0.0
+            )
             adjustedMoveProbability = baseMoveProbability * remainingMovePassScale
             adjustedPassProbability = basePassProbability * remainingMovePassScale
             adjustedShotProbability = baseShotProbability + shotClockUrgencyTransfer
 
-            zone = get_shot_zone(courtPos)
-            preferenceZone = getPreferenceZone(zone)
-            activeLineupPreferences = getActiveLineupPreferences(offense_df)
+            zone = get_shot_zone(gs.courtPos)
+            preferenceZone = gs.getPreferenceZone(zone)
+            activeLineupPreferences = gs.getActiveLineupPreferences(offense_df)
             playerShotPreference = None
             playerShotWillingnessAdjustment = 0.0
             playerShotWillingnessTransfer = 0.0
-            if preferenceZone is not None and is_in_frontcourt(team_side,courtPos):
-                preferenceColumn = {"inside":"inside_preference","midrange":"midrange_preference","three":"three_preference"}[preferenceZone]
-                playerShotPreference = float(possPlayer[preferenceColumn])
-                playerShotWillingnessAdjustment = max(-playerShotWillingnessMaximumAdjustment,min(playerShotWillingnessMaximumAdjustment,(playerShotPreference - activeLineupPreferences[preferenceZone]) * playerShotWillingnessPerProportionPoint))
-                availableAdjustedMovePassProbability = adjustedMoveProbability + adjustedPassProbability
+            if preferenceZone is not None and is_in_frontcourt(team_side, gs.courtPos):
+                prefCol = {
+                    "inside": "inside_preference",
+                    "midrange": "midrange_preference",
+                    "three": "three_preference",
+                }[preferenceZone]
+                playerShotPreference = float(gs.possPlayer[prefCol])
+                playerShotWillingnessAdjustment = max(
+                    -gs.playerShotWillingnessMaximumAdjustment,
+                    min(
+                        gs.playerShotWillingnessMaximumAdjustment,
+                        (playerShotPreference - activeLineupPreferences[preferenceZone])
+                        * gs.playerShotWillingnessPerProportionPoint,
+                    ),
+                )
+                availableAMP = adjustedMoveProbability + adjustedPassProbability
                 if playerShotWillingnessAdjustment > 0:
-                    playerShotWillingnessTransfer = min(playerShotWillingnessAdjustment,availableAdjustedMovePassProbability,shotClockUrgencyMaximumShotProbability - adjustedShotProbability)
-                    if availableAdjustedMovePassProbability > 0:
-                        willingnessMovePassScale = (availableAdjustedMovePassProbability - playerShotWillingnessTransfer) / availableAdjustedMovePassProbability
-                        adjustedMoveProbability *= willingnessMovePassScale
-                        adjustedPassProbability *= willingnessMovePassScale
+                    playerShotWillingnessTransfer = min(
+                        playerShotWillingnessAdjustment,
+                        availableAMP,
+                        shotClockUrgencyMaximumShotProbability - adjustedShotProbability,
+                    )
+                    if availableAMP > 0:
+                        wScale = (availableAMP - playerShotWillingnessTransfer) / availableAMP
+                        adjustedMoveProbability *= wScale
+                        adjustedPassProbability *= wScale
                     adjustedShotProbability += playerShotWillingnessTransfer
                 elif playerShotWillingnessAdjustment < 0:
-                    playerShotWillingnessTransfer = min(-playerShotWillingnessAdjustment,adjustedShotProbability)
+                    playerShotWillingnessTransfer = min(-playerShotWillingnessAdjustment, adjustedShotProbability)
                     adjustedShotProbability -= playerShotWillingnessTransfer
-                    if availableAdjustedMovePassProbability > 0:
-                        adjustedMoveProbability += playerShotWillingnessTransfer * (adjustedMoveProbability / availableAdjustedMovePassProbability)
-                        adjustedPassProbability += playerShotWillingnessTransfer * (adjustedPassProbability / availableAdjustedMovePassProbability)
+                    if availableAMP > 0:
+                        adjustedMoveProbability += playerShotWillingnessTransfer * (
+                            adjustedMoveProbability / availableAMP
+                        )
+                        adjustedPassProbability += playerShotWillingnessTransfer * (
+                            adjustedPassProbability / availableAMP
+                        )
                     else:
                         adjustedMoveProbability += playerShotWillingnessTransfer / 2
                         adjustedPassProbability += playerShotWillingnessTransfer / 2
@@ -1088,254 +538,293 @@ def rungame(gid, home, away, league, HC, gamenum):
                 action = "pass"
             else:
                 action = "shot"
-
             if attemptFinalHeave:
                 action = "heave"
 
-            if currShotClock <= offenseShotClockUrgencyStart and not attemptFinalHeave:
-                print(f"Shot-clock urgency: {currShotClock:.1f}s | Pace: {offensePace} | Urgency begins: {offenseShotClockUrgencyStart:.1f}s | BBIQ: {shotClockBBIQ:.0f} | Awareness modifier: {shotClockAwarenessModifier:.3f} | Progress: {shotClockUrgencyProgress:.3f} | Base shot chance: {baseShotProbability:.2%} | Requested bonus: {requestedShotClockUrgencyBonus:.2%} | Actual transfer: {shotClockUrgencyTransfer:.2%} | Adjusted shot chance: {adjustedShotProbability:.2%} | Roll: {actionRoll:.4f} | Action: {action.upper()}")
-
+            if gs.currShotClock <= offenseShotClockUrgencyStart and not attemptFinalHeave:
+                print(
+                    f"Shot-clock urgency: {gs.currShotClock:.1f}s | Pace: {offensePace} | Urgency begins: {offenseShotClockUrgencyStart:.1f}s | BBIQ: {shotClockBBIQ:.0f} | Awareness modifier: {shotClockAwarenessModifier:.3f} | Progress: {shotClockUrgencyProgress:.3f} | Base shot chance: {baseShotProbability:.2%} | Requested bonus: {requestedShotClockUrgencyBonus:.2%} | Actual transfer: {shotClockUrgencyTransfer:.2%} | Adjusted shot chance: {adjustedShotProbability:.2%} | Roll: {actionRoll:.4f} | Action: {action.upper()}"
+                )
             if playerShotPreference is not None and not attemptFinalHeave:
-                print(f"Shot preference: {preferenceZone} | Player: {playerShotPreference:.1f}% | Active lineup: {activeLineupPreferences[preferenceZone]:.1f}% | Requested adjustment: {playerShotWillingnessAdjustment:+.2%} | Actual transfer: {math.copysign(playerShotWillingnessTransfer,playerShotWillingnessAdjustment):+.2%} | Final shot chance: {adjustedShotProbability:.2%}")
+                print(
+                    f"Shot preference: {preferenceZone} | Player: {playerShotPreference:.1f}% | Active lineup: {activeLineupPreferences[preferenceZone]:.1f}% | Requested adjustment: {playerShotWillingnessAdjustment:+.2%} | Actual transfer: {math.copysign(playerShotWillingnessTransfer, playerShotWillingnessAdjustment):+.2%} | Final shot chance: {adjustedShotProbability:.2%}"
+                )
 
             took_shot = False
-            in_frontcourt = is_in_frontcourt(team_side, courtPos)
-
+            in_frontcourt = is_in_frontcourt(team_side, gs.courtPos)
             if action == "shot" and (zone is None or not in_frontcourt):
-                if crossed_midcourt:
-                    action = "pass"
-                else:
-                    action = "move"
+                action = "pass" if gs.crossed_midcourt else "move"
 
             if attemptFinalHeave:
-                randTime = currTime
+                randTime = gs.currTime
             else:
-                paceActionTimeCategory = random.choices(paceActionTimeCategories,weights=paceActionTimeWeights[offensePace],k=1)[0]
-                paceActionTimeModifier = paceActionTimeModifiers[paceActionTimeCategory]
-                availableActionTime = max(0.0,min(currShotClock,currTime))
-                minimumActionTime = max(0.25,0.439 * paceActionTimeModifier)
-                maximumActionTime = 3.33 * paceActionTimeModifier
+                paceCat = random.choices(
+                    gs.paceActionTimeCategories, weights=gs.paceActionTimeWeights[offensePace], k=1
+                )[0]
+                paceATM = gs.paceActionTimeModifiers[paceCat]
+                availableActionTime = max(0.0, min(gs.currShotClock, gs.currTime))
+                minAT = max(0.25, 0.439 * paceATM)
+                maxAT = 3.33 * paceATM
                 if availableActionTime >= 2:
-                    actionTimeUpperBound = min(maximumActionTime,availableActionTime)
-                    actionTimeLowerBound = min(minimumActionTime,actionTimeUpperBound)
-                    randTime = round(random.uniform(actionTimeLowerBound,actionTimeUpperBound),2)
+                    randTime = round(
+                        random.uniform(min(minAT, min(maxAT, availableActionTime)), min(maxAT, availableActionTime)), 2
+                    )
                 elif availableActionTime > 0.25:
-                    randTime = round(min(availableActionTime,max(0.25,1.0 * paceActionTimeModifier)),2)
+                    randTime = round(min(availableActionTime, max(0.25, 1.0 * paceATM)), 2)
                 else:
                     randTime = availableActionTime
-            if attemptFinalHeave:
-                elapsedTime = currTime
-            else:
-                roundedActionTime = round(randTime,2)
-                elapsedTime = availableActionTime if roundedActionTime <= 0 < availableActionTime else min(availableActionTime,roundedActionTime)
-            addPlayingTime(elapsedTime)
-            teamPossessionTime[offense] += elapsedTime
-            currTime = max(0.0,currTime - elapsedTime)
-            currShotClock = max(0.0,currShotClock - elapsedTime)
+
+            elapsedTime = (
+                gs.currTime
+                if attemptFinalHeave
+                else (
+                    availableActionTime
+                    if round(randTime, 2) <= 0 < availableActionTime
+                    else min(availableActionTime, round(randTime, 2))
+                )
+            )
+            gs.addPlayingTime(elapsedTime)
+            gs.teamPossessionTime[offense] += elapsedTime
+            gs.currTime = max(0.0, gs.currTime - elapsedTime)
+            gs.currShotClock = max(0.0, gs.currShotClock - elapsedTime)
 
             shotClockQualityAdjustment = 0.0
             shotClockQualityLabel = "normal window"
-            if league == "CBB":
-                if currShotClock >= 26:
+            if gs.league == "CBB":
+                if gs.currShotClock >= 26:
                     shotClockQualityAdjustment = -0.020
                     shotClockQualityLabel = "extremely early"
-                elif currShotClock >= 22:
+                elif gs.currShotClock >= 22:
                     shotClockQualityAdjustment = -0.010
                     shotClockQualityLabel = "early"
-                elif currShotClock < 3:
+                elif gs.currShotClock < 3:
                     shotClockQualityAdjustment = -0.015
                     shotClockQualityLabel = "desperation"
-                elif currShotClock < 6:
+                elif gs.currShotClock < 6:
                     shotClockQualityAdjustment = -0.005
                     shotClockQualityLabel = "late"
             else:
-                if currShotClock >= 21:
+                if gs.currShotClock >= 21:
                     shotClockQualityAdjustment = -0.020
                     shotClockQualityLabel = "extremely early"
-                elif currShotClock >= 18:
+                elif gs.currShotClock >= 18:
                     shotClockQualityAdjustment = -0.010
                     shotClockQualityLabel = "early"
-                elif currShotClock < 2.5:
+                elif gs.currShotClock < 2.5:
                     shotClockQualityAdjustment = -0.015
                     shotClockQualityLabel = "desperation"
-                elif currShotClock < 5:
+                elif gs.currShotClock < 5:
                     shotClockQualityAdjustment = -0.005
                     shotClockQualityLabel = "late"
 
-            if currTime < 60:
-                game_clock_text = f"00:{max(0.0, currTime):04.1f}"
+            if gs.currTime < 60:
+                game_clock_text = f"00:{max(0.0, gs.currTime):04.1f}"
             else:
-                display_game_time = max(0, math.ceil(currTime))
-                display_minutes = display_game_time // 60
-                display_seconds = display_game_time % 60
-                game_clock_text = f"{display_minutes:02d}:{display_seconds:02d}"
-
-            display_shot_clock = max(0.0, currShotClock)
-
-            if display_shot_clock < 10:
-                shot_clock_text = f"{display_shot_clock:04.1f}"
-            else:
-                shot_clock_text = f"{math.ceil(display_shot_clock):02d}"
-
-            qtrminutes, qtrseconds = divmod(displayGameTime, 60)
-            qtrhours, qtrminutes = divmod(qtrminutes, 60)
-
-            shotminutes, shotseconds = divmod(displayShotClock, 60)
-            shothours, shotminutes = divmod(shotminutes, 60)
+                dm = max(0, math.ceil(gs.currTime))
+                game_clock_text = f"{dm // 60:02d}:{dm % 60:02d}"
+            display_shot_clock = max(0.0, gs.currShotClock)
+            shot_clock_text = (
+                f"{display_shot_clock:04.1f}" if display_shot_clock < 10 else f"{math.ceil(display_shot_clock):02d}"
+            )
 
             if action == "heave":
-                currTime = 0
-                currShotClock = 0
-                assistPlayer = None
+                gs.currTime = 0
+                gs.currShotClock = 0
+                gs.assistPlayer = None
                 took_shot = True
-
+                heaveStats = gs.t1stats if offense == t1 else gs.t2stats
+                heaveShooterMinutes = float(heaveStats.at[gs.possPlayer["id"].item(), "MP"]) / 60
+                heaveRecoveryMinutes = gs.getPlayerRecoveryMinutes(gs.possPlayer)
+                heaveFatigueMinutes = max(0.0, heaveShooterMinutes - heaveRecoveryMinutes)
+                (
+                    heaveShootingRating,
+                    baseHeaveShootingRating,
+                    heaveStaminaCapacity,
+                    heaveShooterMinutes,
+                    heaveStaminaUsageRatio,
+                    heaveFatiguePenalty,
+                    heaveStaminaModifier,
+                ) = get_stamina_adjusted_rating(gs.possPlayer, "shooting3", heaveShooterMinutes, heaveRecoveryMinutes)
+                staminaAdjustedHeave = heaveShootingRating
+                heaveShootingRating, heaveMomentumStrength, heaveMomentumBonus, heaveMomentumModifier = (
+                    gs.getMomentumAdjustedRating(staminaAdjustedHeave, offense)
+                )
+                normalHeaveChance = (0.008 * heaveShootingRating) + 0.13
                 if offense == t1:
-                    heaveStats = t1stats
-                else:
-                    heaveStats = t2stats
-
-                heaveShooterMinutes = float(heaveStats.at[possPlayer["id"].item(),"MP"]) / 60
-                heaveRecoveryMinutes = getPlayerRecoveryMinutes(possPlayer)
-                heaveFatigueMinutes = max(0.0,heaveShooterMinutes - heaveRecoveryMinutes)
-                (heaveShootingRating,baseHeaveShootingRating,heaveStaminaCapacity,heaveShooterMinutes,heaveStaminaUsageRatio,heaveFatiguePenalty,heaveStaminaModifier,) = get_stamina_adjusted_rating(possPlayer,"shooting3",heaveShooterMinutes,heaveRecoveryMinutes)
-                staminaAdjustedHeaveShootingRating = heaveShootingRating
-                (heaveShootingRating,heaveMomentumStrength,heaveMomentumBonus,heaveMomentumModifier,) = getMomentumAdjustedRating(staminaAdjustedHeaveShootingRating,offense)
-
-                normalHeaveThreeChance = (0.008 * heaveShootingRating) + 0.13
-                if offense == t1:
-                    normalHeaveThreeChance += HCAAdj
-                heaveChance = max(finalHeaveMinimumChance,min(finalHeaveMaximumChance,normalHeaveThreeChance * finalHeaveDifficultyMultiplier))
+                    normalHeaveChance += gs.HCAAdj
+                heaveChance = max(
+                    finalHeaveMinimumChance,
+                    min(finalHeaveMaximumChance, normalHeaveChance * finalHeaveDifficultyMultiplier),
+                )
                 heaveRoll = random.random()
-                heaveMade = (heaveRoll < heaveChance)
-
+                heaveMade = heaveRoll < heaveChance
                 if offense == t1:
-                    t1stats.at[possPlayer["id"].item(),"3PT Shot Att",] += 1
-                    t13a += 1
+                    gs.t1stats.at[gs.possPlayer["id"].item(), "3PT Shot Att"] += 1
+                    gs.t13a += 1
                 else:
-                    t2stats.at[possPlayer["id"].item(),"3PT Shot Att",] += 1
-                    t23a += 1
-
-                print(f"{possPlayer['position']} {possPlayer['first_name']} {possPlayer['last_name']} launches a desperation heave from beyond half court!")
-                print(f"Final heave: shooting3 {heaveShootingRating:.4f} [base {baseHeaveShootingRating:.2f}; stamina adjusted {staminaAdjustedHeaveShootingRating:.4f}; MP {heaveShooterMinutes:.2f}; recovery {heaveRecoveryMinutes:.2f}; fatigue load {heaveFatigueMinutes:.2f}/{heaveStaminaCapacity:.2f}; stamina modifier {heaveStaminaModifier:.3f}; momentum {heaveMomentumStrength:.0%}; momentum bonus {heaveMomentumBonus:.2%}; momentum modifier {heaveMomentumModifier:.3f}] | Normal 3PT chance: {normalHeaveThreeChance:.2%} | Heave multiplier: {finalHeaveDifficultyMultiplier:.3f} | Heave chance: {heaveChance:.2%} | Roll: {heaveRoll:.4f}")
-
+                    gs.t2stats.at[gs.possPlayer["id"].item(), "3PT Shot Att"] += 1
+                    gs.t23a += 1
+                print(
+                    f"{gs.possPlayer['position']} {gs.possPlayer['first_name']} {gs.possPlayer['last_name']} launches a desperation heave from beyond half court!"
+                )
+                print(
+                    f"Final heave: shooting3 {heaveShootingRating:.4f} [base {baseHeaveShootingRating:.2f}; stamina adjusted {staminaAdjustedHeave:.4f}; MP {heaveShooterMinutes:.2f}; recovery {heaveRecoveryMinutes:.2f}; fatigue load {heaveFatigueMinutes:.2f}/{heaveStaminaCapacity:.2f}; stamina modifier {heaveStaminaModifier:.3f}; momentum {heaveMomentumStrength:.0%}; momentum bonus {heaveMomentumBonus:.2%}; momentum modifier {heaveMomentumModifier:.3f}] | Normal 3PT chance: {normalHeaveChance:.2%} | Heave multiplier: {finalHeaveDifficultyMultiplier:.3f} | Heave chance: {heaveChance:.2%} | Roll: {heaveRoll:.4f}"
+                )
                 if heaveMade:
                     if offense == t1:
-                        t1pts += 3
-                        t13m += 1
-                        t1stats.at[possPlayer["id"].item(),"3PT Shot Made",] += 1
-                        if period == 1:
-                            t1q1pts += 3
-                        elif period == 2:
-                            t1q2pts += 3
-                        elif league != "CBB" and period == 3:
-                            t1q3pts += 3
-                        elif league != "CBB" and period == 4:
-                            t1q4pts += 3
-                        elif period > periodPerGame:
-                            t1qotpts += 3
+                        gs.t1pts += 3
+                        gs.t13m += 1
+                        gs.t1stats.at[gs.possPlayer["id"].item(), "3PT Shot Made"] += 1
+                        if gs.period == 1:
+                            gs.t1q1pts += 3
+                        elif gs.period == 2:
+                            gs.t1q2pts += 3
+                        elif gs.league != "CBB" and gs.period == 3:
+                            gs.t1q3pts += 3
+                        elif gs.league != "CBB" and gs.period == 4:
+                            gs.t1q4pts += 3
+                        elif gs.period > gs.periodPerGame:
+                            gs.t1qotpts += 3
                     else:
-                        t2pts += 3
-                        t23m += 1
-                        t2stats.at[possPlayer["id"].item(),"3PT Shot Made",] += 1
-                        if period == 1:
-                            t2q1pts += 3
-                        elif period == 2:
-                            t2q2pts += 3
-                        elif league != "CBB" and period == 3:
-                            t2q3pts += 3
-                        elif league != "CBB" and period == 4:
-                            t2q4pts += 3
-                        elif period > periodPerGame:
-                            t2qotpts += 3
-
+                        gs.t2pts += 3
+                        gs.t23m += 1
+                        gs.t2stats.at[gs.possPlayer["id"].item(), "3PT Shot Made"] += 1
+                        if gs.period == 1:
+                            gs.t2q1pts += 3
+                        elif gs.period == 2:
+                            gs.t2q2pts += 3
+                        elif gs.league != "CBB" and gs.period == 3:
+                            gs.t2q3pts += 3
+                        elif gs.league != "CBB" and gs.period == 4:
+                            gs.t2q4pts += 3
+                        elif gs.period > gs.periodPerGame:
+                            gs.t2qotpts += 3
                     print("...GOOD! IT COUNTS AT THE BUZZER!")
-                    adjustMomentum(offense,momentumMadeThreeSwing,"made final heave")
+                    gs.adjustMomentum(offense, momentumMadeThreeSwing, "made final heave")
+                    gs.updateLargestLeads()
+                    gs.pbp.append(gs.make_play(heave, heave_made, elapsed=elapsedTime, ball_carrier=gs.possPlayer))
                 else:
                     print("...OFF THE MARK! The horn sounds.")
-                    adjustMomentum(defense,momentumMissSwing,"missed final heave")
+                    gs.adjustMomentum(defense, momentumMissSwing, "missed final heave")
+                    gs.pbp.append(gs.make_play(heave, heave_missed, elapsed=elapsedTime, ball_carrier=gs.possPlayer))
 
             if zone is not None and in_frontcourt:
-                if crossed_midcourt is False:
-                    shoot_modifier = 0.5
-                else:
-                    shoot_modifier = 1.0
-
                 if action == "shot":
-                    zone = get_shot_zone(courtPos)
-                    in_frontcourt = is_in_frontcourt(team_side, courtPos)
+                    zone = get_shot_zone(gs.courtPos)
+                    in_frontcourt = is_in_frontcourt(team_side, gs.courtPos)
                     if zone is not None and in_frontcourt:
-                        shootPlayer = possPlayer
-
-                        if offense == t1:
-                            offenseStats = t1stats
-                            defenseStats = t2stats
-                        else:
-                            offenseStats = t2stats
-                            defenseStats = t1stats
-
-                        shootPlayerMinutes = float(offenseStats.at[shootPlayer["id"].item(),"MP"]) / 60
-                        defenderMinutes = float(defenseStats.at[defender["id"].item(),"MP"]) / 60
-                        shootPlayerRecoveryMinutes = getPlayerRecoveryMinutes(shootPlayer)
-                        defenderRecoveryMinutes = getPlayerRecoveryMinutes(defender)
-                        shootPlayerFatigueMinutes = max(0.0,shootPlayerMinutes - shootPlayerRecoveryMinutes)
-                        defenderFatigueMinutes = max(0.0,defenderMinutes - defenderRecoveryMinutes)
-                        (_,_,defenderStaminaCapacity,defenderMinutes,defenderStaminaUsageRatio,defenderFatiguePenalty,defenderStaminaModifier,) = get_stamina_adjusted_rating(defender,"perimeter_defense",defenderMinutes,defenderRecoveryMinutes)
+                        shootPlayer = gs.possPlayer
+                        offenseStats = gs.t1stats if offense == t1 else gs.t2stats
+                        defenseStats = gs.t2stats if offense == t1 else gs.t1stats
+                        shootPlayerMinutes = float(offenseStats.at[shootPlayer["id"].item(), "MP"]) / 60
+                        defenderMinutes = float(defenseStats.at[defender["id"].item(), "MP"]) / 60
+                        shootPlayerRecoveryMinutes = gs.getPlayerRecoveryMinutes(shootPlayer)
+                        defenderRecoveryMinutes = gs.getPlayerRecoveryMinutes(defender)
+                        shootPlayerFatigueMinutes = max(0.0, shootPlayerMinutes - shootPlayerRecoveryMinutes)
+                        defenderFatigueMinutes = max(0.0, defenderMinutes - defenderRecoveryMinutes)
+                        (
+                            _,
+                            _,
+                            defenderStaminaCapacity,
+                            defenderMinutes,
+                            defenderStaminaUsageRatio,
+                            defenderFatiguePenalty,
+                            defenderStaminaModifier,
+                        ) = get_stamina_adjusted_rating(
+                            defender, "perimeter_defense", defenderMinutes, defenderRecoveryMinutes
+                        )
                         baseBlockRating = float(defender["block"])
 
                         if zone in ["three", "corner_three"]:
                             shotOffenseType = "shooting3"
-                            (shotOffense, baseShotOffense, shooterStaminaCapacity, shootPlayerMinutes,shooterStaminaUsageRatio, shooterFatiguePenalty,shooterStaminaModifier,) = get_stamina_adjusted_rating(shootPlayer, shotOffenseType,shootPlayerMinutes,shootPlayerRecoveryMinutes)
+                            (
+                                shotOffense,
+                                baseShotOffense,
+                                shooterStaminaCapacity,
+                                shootPlayerMinutes,
+                                shooterStaminaUsageRatio,
+                                shooterFatiguePenalty,
+                                shooterStaminaModifier,
+                            ) = get_stamina_adjusted_rating(
+                                shootPlayer, shotOffenseType, shootPlayerMinutes, shootPlayerRecoveryMinutes
+                            )
                             staminaAdjustedShotOffense = shotOffense
-                            (shotOffense,shotMomentumStrength,shotMomentumBonus,shotMomentumModifier,) = getMomentumAdjustedRating(staminaAdjustedShotOffense,offense)
+                            shotOffense, shotMomentumStrength, shotMomentumBonus, shotMomentumModifier = (
+                                gs.getMomentumAdjustedRating(staminaAdjustedShotOffense, offense)
+                            )
                             baseShotChance = (0.008 * shotOffense) + 0.180
                             if offense == t1:
-                                baseShotChance += HCAAdj
-                            (shotDefenseAdjustment,shotDefense,shotDefenseType,) = get_shot_defense_adjustment(defender,courtPos,defenderStaminaModifier)
-                            madeShot = max(0.0,min(1.0,baseShotChance + shotDefenseAdjustment + shotClockQualityAdjustment + doubleTeamShotAdjustment))
-
-                            (shootingFoulChance,zoneFoulBaseline,foulDefenderIQ,bbiqFoulModifier,) = get_shooting_foul_chance(defender,courtPos)
+                                baseShotChance += gs.HCAAdj
+                            shotDefenseAdjustment, shotDefense, shotDefenseType = get_shot_defense_adjustment(
+                                defender, gs.courtPos, defenderStaminaModifier
+                            )
+                            madeShot = max(
+                                0.0,
+                                min(
+                                    1.0,
+                                    baseShotChance
+                                    + shotDefenseAdjustment
+                                    + shotClockQualityAdjustment
+                                    + doubleTeamShotAdjustment,
+                                ),
+                            )
+                            shootingFoulChance, zoneFoulBaseline, foulDefenderIQ, bbiqFoulModifier = (
+                                get_shooting_foul_chance(defender, gs.courtPos)
+                            )
                             shootingFoulRoll = random.random()
-                            shootingFoul = (shootingFoulRoll < shootingFoulChance)
+                            shootingFoul = shootingFoulRoll < shootingFoulChance
                             defenderFouledOut = False
                             defenderFoulProtected = False
                             if shootingFoul:
-
                                 defenderStatId = defender["id"].item()
-                                defenderPlayerId = int(defender["player_id"])
-
+                                defenderPlayerId = int(defender["ID"])
                                 if offense == t1:
-                                    t2stats.at[defenderStatId,"Foul",] += 1
-                                    if period == 1:
-                                        t2FirstHalfTeamFouls += 1
-                                        defendingHalfTeamFouls = t2FirstHalfTeamFouls
+                                    gs.t2stats.at[defenderStatId, "Foul"] += 1
+                                    if gs.period == 1:
+                                        gs.t2FirstHalfTeamFouls += 1
+                                        defendingHalfTeamFouls = gs.t2FirstHalfTeamFouls
                                     else:
-                                        t2SecondHalfTeamFouls += 1
-                                        defendingHalfTeamFouls = t2SecondHalfTeamFouls
-
-                                    defenderFoulTotal = int(t2stats.at[defenderStatId,"Foul"])
-                                    if defenderFoulTotal >= foulOutLimit and defenderPlayerId not in t2FouledOutPlayerIds:
-                                        t2FouledOutPlayerIds.add(defenderPlayerId)
+                                        gs.t2SecondHalfTeamFouls += 1
+                                        defendingHalfTeamFouls = gs.t2SecondHalfTeamFouls
+                                    defenderFoulTotal = int(gs.t2stats.at[defenderStatId, "Foul"])
+                                    if (
+                                        defenderFoulTotal >= gs.foulOutLimit
+                                        and defenderPlayerId not in gs.t2FouledOutPlayerIds
+                                    ):
+                                        gs.t2FouledOutPlayerIds.add(defenderPlayerId)
                                         defenderFouledOut = True
-                                    defenderFoulProtected = registerFoulProtection(2,defenderStatId,defenderPlayerId,f"{defender['position']} {defender['first_name']} {defender['last_name']}")
+                                    defenderFoulProtected = gs.registerFoulProtection(
+                                        2,
+                                        defenderStatId,
+                                        defenderPlayerId,
+                                        f"{defender['position']} {defender['first_name']} {defender['last_name']}",
+                                    )
                                 else:
-                                    t1stats.at[defenderStatId,"Foul",] += 1
-                                    if period == 1:
-                                        t1FirstHalfTeamFouls += 1
-                                        defendingHalfTeamFouls = t1FirstHalfTeamFouls
+                                    gs.t1stats.at[defenderStatId, "Foul"] += 1
+                                    if gs.period == 1:
+                                        gs.t1FirstHalfTeamFouls += 1
+                                        defendingHalfTeamFouls = gs.t1FirstHalfTeamFouls
                                     else:
-                                        t1SecondHalfTeamFouls += 1
-                                        defendingHalfTeamFouls = t1SecondHalfTeamFouls
-
-                                    defenderFoulTotal = int(t1stats.at[defenderStatId,"Foul"])
-                                    if defenderFoulTotal >= foulOutLimit and defenderPlayerId not in t1FouledOutPlayerIds:
-                                        t1FouledOutPlayerIds.add(defenderPlayerId)
+                                        gs.t1SecondHalfTeamFouls += 1
+                                        defendingHalfTeamFouls = gs.t1SecondHalfTeamFouls
+                                    defenderFoulTotal = int(gs.t1stats.at[defenderStatId, "Foul"])
+                                    if (
+                                        defenderFoulTotal >= gs.foulOutLimit
+                                        and defenderPlayerId not in gs.t1FouledOutPlayerIds
+                                    ):
+                                        gs.t1FouledOutPlayerIds.add(defenderPlayerId)
                                         defenderFouledOut = True
-                                    defenderFoulProtected = registerFoulProtection(1,defenderStatId,defenderPlayerId,f"{defender['position']} {defender['first_name']} {defender['last_name']}")
+                                    defenderFoulProtected = gs.registerFoulProtection(
+                                        1,
+                                        defenderStatId,
+                                        defenderPlayerId,
+                                        f"{defender['position']} {defender['first_name']} {defender['last_name']}",
+                                    )
                                 print(f"Defending team fouls this half: {defendingHalfTeamFouls}")
-
                                 if defenderFouledOut:
-                                    print(f"{defender['position']} {defender['first_name']} {defender['last_name']} has fouled out with {defenderFoulTotal} fouls!")
-
+                                    print(
+                                        f"{defender['position']} {defender['first_name']} {defender['last_name']} has fouled out with {defenderFoulTotal} fouls!"
+                                    )
                                 blockChance = 0
                                 zoneBlockBaseline = 0
                                 blockRating = baseBlockRating * defenderStaminaModifier
@@ -1346,333 +835,418 @@ def rungame(gid, home, away, league, HC, gamenum):
                                 blockRoll = None
                                 shotBlocked = False
                             else:
-                                (blockChance, zoneBlockBaseline, blockRating, blockRatingAdjustment, defenderHeight,
-                                 shooterHeight, heightAdjustment,) = get_block_chance(defender, shootPlayer, courtPos,
-                                                                                      defenderStaminaModifier)
+                                (
+                                    blockChance,
+                                    zoneBlockBaseline,
+                                    blockRating,
+                                    blockRatingAdjustment,
+                                    defenderHeight,
+                                    shooterHeight,
+                                    heightAdjustment,
+                                ) = get_block_chance(defender, shootPlayer, gs.courtPos, defenderStaminaModifier)
                                 blockRoll = random.random()
-                                shotBlocked = (blockRoll < blockChance)
-
-                            if shotBlocked:
-                                shotRand = None
-                            else:
-                                shotRand = random.random()
-
+                                shotBlocked = blockRoll < blockChance
+                            shotRand = None if shotBlocked else random.random()
                             if shootingFoul:
                                 madeShot *= shootingFoulMadeShotModifier
-                            shotMade = (not shotBlocked and shotRand < madeShot)
-                            shotRollText = ("SKIPPED" if shotRand is None else f"{shotRand:.4f}")
-                            print(f"Shot offense: {shotOffense:.4f} [{shotOffenseType}; base {baseShotOffense:.2f}; stamina adjusted {staminaAdjustedShotOffense:.4f}; MP {shootPlayerMinutes:.2f}; recovery {shootPlayerRecoveryMinutes:.2f}; fatigue load {shootPlayerFatigueMinutes:.2f}/{shooterStaminaCapacity:.2f}; stamina modifier {shooterStaminaModifier:.3f}; momentum {shotMomentumStrength:.0%}; momentum bonus {shotMomentumBonus:.2%}; momentum modifier {shotMomentumModifier:.3f}] | Shot defense: {shotDefense:.4f} [{shotDefenseType}; MP {defenderMinutes:.2f}; recovery {defenderRecoveryMinutes:.2f}; fatigue load {defenderFatigueMinutes:.2f}/{defenderStaminaCapacity:.2f}; stamina modifier {defenderStaminaModifier:.3f}] | Defense adjustment: {shotDefenseAdjustment:+.2%} | Shot-clock quality: {shotClockQualityLabel} {shotClockQualityAdjustment:+.2%} | Double-team role: {doubleTeamRole} {doubleTeamShotAdjustment:+.2%} | Final shot chance: {madeShot:.2%} | Roll: {shotRollText}")
-                            blockRollText = ("SKIPPED" if blockRoll is None else f"{blockRoll:.4f}")
-
+                            shotMade = not shotBlocked and shotRand is not None and shotRand < madeShot
                             print(
-                                f"Shooting foul baseline: {zoneFoulBaseline:.2%} | "
-                                f"Defender BBIQ: {foulDefenderIQ:.0f} | "
-                                f"BBIQ modifier: {bbiqFoulModifier:.3f} | "
-                                f"Foul chance: {shootingFoulChance:.2%} | "
-                                f"Foul roll: {shootingFoulRoll:.4f} | "
-                                f"{'FOUL' if shootingFoul else 'NO FOUL'}"
+                                f"Shot offense: {shotOffense:.4f} [{shotOffenseType}; base {baseShotOffense:.2f}; stamina adjusted {staminaAdjustedShotOffense:.4f}; MP {shootPlayerMinutes:.2f}; recovery {shootPlayerRecoveryMinutes:.2f}; fatigue load {shootPlayerFatigueMinutes:.2f}/{shooterStaminaCapacity:.2f}; stamina modifier {shooterStaminaModifier:.3f}; momentum {shotMomentumStrength:.0%}; momentum bonus {shotMomentumBonus:.2%}; momentum modifier {shotMomentumModifier:.3f}] | Shot defense: {shotDefense:.4f} [{shotDefenseType}; MP {defenderMinutes:.2f}; recovery {defenderRecoveryMinutes:.2f}; fatigue load {defenderFatigueMinutes:.2f}/{defenderStaminaCapacity:.2f}; stamina modifier {defenderStaminaModifier:.3f}] | Defense adjustment: {shotDefenseAdjustment:+.2%} | Shot-clock quality: {shotClockQualityLabel} {shotClockQualityAdjustment:+.2%} | Double-team role: {doubleTeamRole} {doubleTeamShotAdjustment:+.2%} | Final shot chance: {madeShot:.2%} | Roll: {'SKIPPED' if shotRand is None else f'{shotRand:.4f}'}"
                             )
-
                             print(
-                                f"Block rating: {blockRating:.4f} [base {baseBlockRating:.2f}; MP {defenderMinutes:.2f}; recovery {defenderRecoveryMinutes:.2f}; fatigue load {defenderFatigueMinutes:.2f}/{defenderStaminaCapacity:.2f}; modifier {defenderStaminaModifier:.3f}] | "
-                                f"Zone baseline: {zoneBlockBaseline:.2%} | "
-                                f"Rating adjustment: "
-                                f"{blockRatingAdjustment:+.2%} | "
-                                f"Height: {defenderHeight:.0f} vs "
-                                f"{shooterHeight:.0f} | "
-                                f"Height adjustment: "
-                                f"{heightAdjustment:+.2%} | "
-                                f"Block chance: {blockChance:.2%} | "
-                                f"Block roll: {blockRollText} | "
-                                f"{'BLOCKED' if shotBlocked else 'NOT BLOCKED'}"
+                                f"Shooting foul baseline: {zoneFoulBaseline:.2%} | Defender BBIQ: {foulDefenderIQ:.0f} | BBIQ modifier: {bbiqFoulModifier:.3f} | Foul chance: {shootingFoulChance:.2%} | Foul roll: {shootingFoulRoll:.4f} | {'FOUL' if shootingFoul else 'NO FOUL'}"
                             )
-
+                            print(
+                                f"Block rating: {blockRating:.4f} [base {baseBlockRating:.2f}; MP {defenderMinutes:.2f}; recovery {defenderRecoveryMinutes:.2f}; fatigue load {defenderFatigueMinutes:.2f}/{defenderStaminaCapacity:.2f}; modifier {defenderStaminaModifier:.3f}] | Zone baseline: {zoneBlockBaseline:.2%} | Rating adjustment: {blockRatingAdjustment:+.2%} | Height: {defenderHeight:.0f} vs {shooterHeight:.0f} | Height adjustment: {heightAdjustment:+.2%} | Block chance: {blockChance:.2%} | Block roll: {'SKIPPED' if blockRoll is None else f'{blockRoll:.4f}'} | {'BLOCKED' if shotBlocked else 'NOT BLOCKED'}"
+                            )
                             if not shootingFoul or shotMade:
                                 if offense == t1:
-                                    t1stats.at[shootPlayer["id"].item(), "3PT Shot Att",] += 1
-                                    t13a += 1
+                                    gs.t1stats.at[shootPlayer["id"].item(), "3PT Shot Att"] += 1
+                                    gs.t13a += 1
                                 else:
-                                    t2stats.at[shootPlayer["id"].item(), "3PT Shot Att",] += 1
-                                    t23a += 1
-
-                            print((str(period) + pInd if period <= periodPerGame else "OT"+str(period-periodPerGame))+ ": "+game_clock_text+ " / Shot Clock: :"+ shot_clock_text+ " ("+ possTeam+ ")")
-                            print(f"3-point attempt from {shootPlayer['position']} {shootPlayer['first_name']} {shootPlayer['last_name']}")
+                                    gs.t2stats.at[shootPlayer["id"].item(), "3PT Shot Att"] += 1
+                                    gs.t23a += 1
+                            print(
+                                periodLabel
+                                + ": "
+                                + game_clock_text
+                                + " / Shot Clock: :"
+                                + shot_clock_text
+                                + " ("
+                                + gs.possTeam
+                                + ")"
+                            )
+                            print(
+                                f"3-point attempt from {shootPlayer['position']} {shootPlayer['first_name']} {shootPlayer['last_name']}"
+                            )
                             if shotMade:
                                 if offense == t1:
-                                    t1pts += 3
-                                    t13m += 1
-                                    t1stats.at[shootPlayer["id"].item(),"3PT Shot Made",] += 1
-                                    if assistPlayer is not None: t1stats.at[assistPlayer["id"].item(),"Assist",] += 1
-                                    if period == 1:
-                                        t1q1pts += 3
-                                    elif period == 2:
-                                        t1q2pts += 3
-                                    elif league != "CBB" and period == 3:
-                                        t1q3pts += 3
-                                    elif league != "CBB" and period == 4:
-                                        t1q4pts += 3
-                                    elif period > periodPerGame:
-                                        t1qotpts += 3
+                                    gs.t1pts += 3
+                                    gs.t13m += 1
+                                    gs.t1stats.at[shootPlayer["id"].item(), "3PT Shot Made"] += 1
+                                    if gs.assistPlayer is not None:
+                                        gs.t1stats.at[gs.assistPlayer["id"].item(), "Assist"] += 1
+                                    if gs.period == 1:
+                                        gs.t1q1pts += 3
+                                    elif gs.period == 2:
+                                        gs.t1q2pts += 3
+                                    elif gs.league != "CBB" and gs.period == 3:
+                                        gs.t1q3pts += 3
+                                    elif gs.league != "CBB" and gs.period == 4:
+                                        gs.t1q4pts += 3
+                                    elif gs.period > gs.periodPerGame:
+                                        gs.t1qotpts += 3
                                 else:
-                                    t2pts += 3
-                                    t23m += 1
-                                    t2stats.at[shootPlayer["id"].item(),"3PT Shot Made",] += 1
-                                    if assistPlayer is not None: t2stats.at[assistPlayer["id"].item(),"Assist",] += 1
-                                    if period == 1:
-                                        t2q1pts += 3
-                                    elif period == 2:
-                                        t2q2pts += 3
-                                    elif league != "CBB" and period == 3:
-                                        t2q3pts += 3
-                                    elif league != "CBB" and period == 4:
-                                        t2q4pts += 3
-                                    elif period > periodPerGame:
-                                        t2qotpts += 3
-
-                                if assistPlayer is not None:
-                                    print("...GOOD! Assisted by " + assistPlayer["position"] + " " + assistPlayer["first_name"] + " " + assistPlayer["last_name"])
-                                else:
-                                    print("...GOOD!")
-                                adjustMomentum(offense,momentumMadeThreeSwing,"made three-point shot")
+                                    gs.t2pts += 3
+                                    gs.t23m += 1
+                                    gs.t2stats.at[shootPlayer["id"].item(), "3PT Shot Made"] += 1
+                                    if gs.assistPlayer is not None:
+                                        gs.t2stats.at[gs.assistPlayer["id"].item(), "Assist"] += 1
+                                    if gs.period == 1:
+                                        gs.t2q1pts += 3
+                                    elif gs.period == 2:
+                                        gs.t2q2pts += 3
+                                    elif gs.league != "CBB" and gs.period == 3:
+                                        gs.t2q3pts += 3
+                                    elif gs.league != "CBB" and gs.period == 4:
+                                        gs.t2q4pts += 3
+                                    elif gs.period > gs.periodPerGame:
+                                        gs.t2qotpts += 3
+                                print(
+                                    "...GOOD! Assisted by "
+                                    + gs.assistPlayer["position"]
+                                    + " "
+                                    + gs.assistPlayer["first_name"]
+                                    + " "
+                                    + gs.assistPlayer["last_name"]
+                                    if gs.assistPlayer is not None
+                                    else "...GOOD!"
+                                )
+                                gs.adjustMomentum(offense, momentumMadeThreeSwing, "made three-point shot")
                             else:
                                 if shotBlocked:
                                     if offense == t1:
-                                        t2stats.at[defender["id"].item(),"Blk",] += 1
+                                        gs.t2stats.at[defender["id"].item(), "Blk"] += 1
                                     else:
-                                        t1stats.at[defender["id"].item(),"Blk",] += 1
-                                    print(f"...BLOCKED by {defender['position']} {defender['first_name']} {defender['last_name']}!")
-                                    adjustMomentum(defense,momentumBlockSwing,"blocked three-point shot")
+                                        gs.t1stats.at[defender["id"].item(), "Blk"] += 1
+                                    print(
+                                        f"...BLOCKED by {defender['position']} {defender['first_name']} {defender['last_name']}!"
+                                    )
+                                    gs.adjustMomentum(defense, momentumBlockSwing, "blocked three-point shot")
                                 elif shootingFoul:
                                     print("...MISSED, but a shooting foul is called!")
-                                    adjustMomentum(defense,momentumMissSwing,"missed three-point shot")
+                                    gs.adjustMomentum(defense, momentumMissSwing, "missed three-point shot")
                                 else:
                                     print("...MISSED!")
-                                    adjustMomentum(defense,momentumMissSwing,"missed three-point shot")
-
-                            assistPlayer = None
+                                    gs.adjustMomentum(defense, momentumMissSwing, "missed three-point shot")
+                            _evt = shot_three if zone == "three" else shot_corner_three
+                            _out = (shot_foul_made if shootingFoul else shot_made) if shotMade else (shot_blocked if shotBlocked else (shot_foul_missed if shootingFoul else shot_missed))
+                            gs.pbp.append(gs.make_play(_evt, _out, elapsed=elapsedTime, ball_carrier=shootPlayer, defender=defender, blocking_id=int(defender["ID"]) if shotBlocked else 0, fouling_id=int(defender["ID"]) if shootingFoul else 0))
+                            if shotMade:
+                                gs.updateLargestLeads()
+                            gs.assistPlayer = None
                             freeThrowsAwarded = 0
                             lastFreeThrowMade = False
                             if shootingFoul:
                                 freeThrowsAwarded = 1 if shotMade else 3
-                                print(f"FOUL on {defender['position']} {defender['first_name']} {defender['last_name']}! {shootPlayer['position']} {shootPlayer['first_name']} {shootPlayer['last_name']} will shoot {freeThrowsAwarded} free throw{'s' if freeThrowsAwarded != 1 else ''}.")
-                                shootingFoulMediaTimeoutTaken = checkTimeoutStoppage(offense,True,shootPlayer)
-                                freeThrowSubsCompleted = shootingFoulMediaTimeoutTaken
-                                if (defenderFouledOut or defenderFoulProtected) and not freeThrowSubsCompleted:
-                                    pullFreeThrowSubs(shootPlayer)
-                                    freeThrowSubsCompleted = True
-                                    defendedPlayerId = None
-                                    currentDefender = None
-                                    previousDefender = None
-                                elif freeThrowsAwarded == 1 and not freeThrowSubsCompleted:
-                                    pullFreeThrowSubs(shootPlayer)
-                                    freeThrowSubsCompleted = True
+                                print(
+                                    f"FOUL on {defender['position']} {defender['first_name']} {defender['last_name']}! {shootPlayer['position']} {shootPlayer['first_name']} {shootPlayer['last_name']} will shoot {freeThrowsAwarded} free throw{'s' if freeThrowsAwarded != 1 else ''}."
+                                )
+                                ftMediaTimeout = gs.checkTimeoutStoppage(offense, True, shootPlayer)
+                                ftSubsCompleted = ftMediaTimeout
+                                if (defenderFouledOut or defenderFoulProtected) and not ftSubsCompleted:
+                                    gs.pullFreeThrowSubs(shootPlayer)
+                                    ftSubsCompleted = True
+                                    gs.defendedPlayerId = None
+                                    gs.currentDefender = None
+                                    gs.previousDefender = None
+                                elif freeThrowsAwarded == 1 and not ftSubsCompleted:
+                                    gs.pullFreeThrowSubs(shootPlayer)
+                                    ftSubsCompleted = True
                                 if offense == t1:
-                                    offense_df = t1onCourt
-                                    defense_df = t2onCourt
-                                    freeThrowStats = t1stats
+                                    offense_df = gs.t1onCourt
+                                    defense_df = gs.t2onCourt
+                                    ftStats = gs.t1stats
                                 else:
-                                    offense_df = t2onCourt
-                                    defense_df = t1onCourt
-                                    freeThrowStats = t2stats
-
-                                shootPlayerMinutes = float(freeThrowStats.at[shootPlayer["id"].item(),"MP"]) / 60
-                                shootPlayerRecoveryMinutes = getPlayerRecoveryMinutes(shootPlayer)
-                                shootPlayerFatigueMinutes = max(0.0,shootPlayerMinutes - shootPlayerRecoveryMinutes)
-                                (_,_,shooterStaminaCapacity,shootPlayerMinutes,shooterStaminaUsageRatio,shooterFatiguePenalty,shooterStaminaModifier,) = get_stamina_adjusted_rating(shootPlayer,"free_throw",shootPlayerMinutes,shootPlayerRecoveryMinutes)
-                                freeThrowHCAAdjustment = HCAAdj if offense == t1 else 0
-
-                                for freeThrowNumber in range(1,freeThrowsAwarded + 1):
-                                    (freeThrowMade, freeThrowChance, freeThrowRoll, freeThrowRating,
-                                     baseFreeThrowRating,) = resolve_free_throw(shootPlayer, freeThrowHCAAdjustment,
-                                                                                shooterStaminaModifier)
-
+                                    offense_df = gs.t2onCourt
+                                    defense_df = gs.t1onCourt
+                                    ftStats = gs.t2stats
+                                shootPlayerMinutes = float(ftStats.at[shootPlayer["id"].item(), "MP"]) / 60
+                                shootPlayerRecoveryMinutes = gs.getPlayerRecoveryMinutes(shootPlayer)
+                                shootPlayerFatigueMinutes = max(0.0, shootPlayerMinutes - shootPlayerRecoveryMinutes)
+                                (
+                                    _,
+                                    _,
+                                    shooterStaminaCapacity,
+                                    shootPlayerMinutes,
+                                    shooterStaminaUsageRatio,
+                                    shooterFatiguePenalty,
+                                    shooterStaminaModifier,
+                                ) = get_stamina_adjusted_rating(
+                                    shootPlayer, "free_throw", shootPlayerMinutes, shootPlayerRecoveryMinutes
+                                )
+                                ftHCA = gs.HCAAdj if offense == t1 else 0
+                                for ftNum in range(1, freeThrowsAwarded + 1):
+                                    ftMade, ftChance, ftRoll, ftRating, baseFTRating = resolve_free_throw(
+                                        shootPlayer, ftHCA, shooterStaminaModifier
+                                    )
                                     if offense == t1:
-                                        t1stats.at[shootPlayer["id"].item(),"FT Shot Att",] += 1
+                                        gs.t1stats.at[shootPlayer["id"].item(), "FT Shot Att"] += 1
                                     else:
-                                        t2stats.at[shootPlayer["id"].item(),"FT Shot Att",] += 1
-
-                                    if freeThrowMade:
+                                        gs.t2stats.at[shootPlayer["id"].item(), "FT Shot Att"] += 1
+                                    if ftMade:
                                         if offense == t1:
-                                            t1pts += 1
-                                            t1stats.at[shootPlayer["id"].item(),"FT Shot Made",] += 1
-                                            if period == 1:
-                                                t1q1pts += 1
-                                            elif period == 2:
-                                                t1q2pts += 1
-                                            elif league != "CBB" and period == 3:
-                                                t1q3pts += 1
-                                            elif league != "CBB" and period == 4:
-                                                t1q4pts += 1
-                                            elif period > periodPerGame:
-                                                t1qotpts += 1
+                                            gs.t1pts += 1
+                                            gs.t1stats.at[shootPlayer["id"].item(), "FT Shot Made"] += 1
+                                            if gs.period == 1:
+                                                gs.t1q1pts += 1
+                                            elif gs.period == 2:
+                                                gs.t1q2pts += 1
+                                            elif gs.league != "CBB" and gs.period == 3:
+                                                gs.t1q3pts += 1
+                                            elif gs.league != "CBB" and gs.period == 4:
+                                                gs.t1q4pts += 1
+                                            elif gs.period > gs.periodPerGame:
+                                                gs.t1qotpts += 1
                                         else:
-                                            t2pts += 1
-                                            t2stats.at[shootPlayer["id"].item(),"FT Shot Made",] += 1
-                                            if period == 1:
-                                                t2q1pts += 1
-                                            elif period == 2:
-                                                t2q2pts += 1
-                                            elif league != "CBB" and period == 3:
-                                                t2q3pts += 1
-                                            elif league != "CBB" and period == 4:
-                                                t2q4pts += 1
-                                            elif period > periodPerGame:
-                                                t2qotpts += 1
-
-                                    print(f"Free throw {freeThrowNumber} of {freeThrowsAwarded}: rating {freeThrowRating:.4f} [base {baseFreeThrowRating:.2f}; MP {shootPlayerMinutes:.2f}; recovery {shootPlayerRecoveryMinutes:.2f}; fatigue load {shootPlayerFatigueMinutes:.2f}/{shooterStaminaCapacity:.2f}; modifier {shooterStaminaModifier:.3f}] | Chance: {freeThrowChance:.2%} | Roll: {freeThrowRoll:.4f} | {'GOOD' if freeThrowMade else 'MISSED'}")
-                                    lastFreeThrowMade = freeThrowMade
-                                    if freeThrowNumber == 1 and freeThrowsAwarded > 1 and not freeThrowSubsCompleted:
-                                        pullFreeThrowSubs(shootPlayer)
-                                        freeThrowSubsCompleted = True
+                                            gs.t2pts += 1
+                                            gs.t2stats.at[shootPlayer["id"].item(), "FT Shot Made"] += 1
+                                            if gs.period == 1:
+                                                gs.t2q1pts += 1
+                                            elif gs.period == 2:
+                                                gs.t2q2pts += 1
+                                            elif gs.league != "CBB" and gs.period == 3:
+                                                gs.t2q3pts += 1
+                                            elif gs.league != "CBB" and gs.period == 4:
+                                                gs.t2q4pts += 1
+                                            elif gs.period > gs.periodPerGame:
+                                                gs.t2qotpts += 1
+                                    print(
+                                        f"Free throw {ftNum} of {freeThrowsAwarded}: rating {ftRating:.4f} [base {baseFTRating:.2f}; MP {shootPlayerMinutes:.2f}; recovery {shootPlayerRecoveryMinutes:.2f}; fatigue load {shootPlayerFatigueMinutes:.2f}/{shooterStaminaCapacity:.2f}; modifier {shooterStaminaModifier:.3f}] | Chance: {ftChance:.2%} | Roll: {ftRoll:.4f} | {'GOOD' if ftMade else 'MISSED'}"
+                                    )
+                                    lastFreeThrowMade = ftMade
+                                    gs.pbp.append(gs.make_play(free_throw, ft_made if ftMade else ft_missed, ball_carrier=shootPlayer, fouling_id=int(defender["ID"])))
+                                    if ftMade:
+                                        gs.updateLargestLeads()
+                                    if ftNum == 1 and freeThrowsAwarded > 1 and not ftSubsCompleted:
+                                        gs.pullFreeThrowSubs(shootPlayer)
+                                        ftSubsCompleted = True
                                         if offense == t1:
-                                            offense_df = t1onCourt
-                                            defense_df = t2onCourt
+                                            offense_df = gs.t1onCourt
+                                            defense_df = gs.t2onCourt
                                         else:
-                                            offense_df = t2onCourt
-                                            defense_df = t1onCourt
-
-                            needsRebound = ((not shootingFoul and not shotMade) or (shootingFoul and not lastFreeThrowMade))
-
+                                            offense_df = gs.t2onCourt
+                                            defense_df = gs.t1onCourt
+                            needsRebound = (not shootingFoul and not shotMade) or (
+                                shootingFoul and not lastFreeThrowMade
+                            )
                             if needsRebound:
                                 rebRand = random.random()
-                                if offense == t1:
-                                    offensiveReboundChance = lineupParameters["t1OffensiveRebound"]
-                                else:
-                                    offensiveReboundChance = lineupParameters["t2OffensiveRebound"]
-
+                                offensiveReboundChance = gs.lineupParameters[
+                                    "t1OffensiveRebound" if offense == t1 else "t2OffensiveRebound"
+                                ]
                                 if rebRand < offensiveReboundChance:
                                     pickRebounder = random.choice(list(offense_df.values()))
                                     while pickRebounder["id"] == shootPlayer["id"]:
                                         pickRebounder = random.choice(list(offense_df.values()))
-                                    possPlayer = pickRebounder
+                                    gs.possPlayer = pickRebounder
                                     if offense == t1:
-                                        t1stats.at[possPlayer["id"].item(),"OREB",] += 1
+                                        gs.t1stats.at[gs.possPlayer["id"].item(), "OREB"] += 1
                                     else:
-                                        t2stats.at[possPlayer["id"].item(),"OREB",] += 1
-                                    print(possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " grabs the offensive rebound for " + possTeam)
-                                    currShotClock = shotClockReset
-                                    if currTime < currShotClock:
-                                        currShotClock = currTime
+                                        gs.t2stats.at[gs.possPlayer["id"].item(), "OREB"] += 1
+                                    print(
+                                        gs.possPlayer["position"]
+                                        + " "
+                                        + gs.possPlayer["first_name"]
+                                        + " "
+                                        + gs.possPlayer["last_name"]
+                                        + " grabs the offensive rebound for "
+                                        + gs.possTeam
+                                    )
+                                    gs.pbp.append(gs.make_play(rebound, offensive_rebound, ball_carrier=gs.possPlayer))
+                                    gs.currShotClock = gs.shotClockReset
+                                    if gs.currTime < gs.currShotClock:
+                                        gs.currShotClock = gs.currTime
                                 else:
-                                    possPlayer = random.choice(list(defense_df.values()))
+                                    gs.possPlayer = random.choice(list(defense_df.values()))
                                     if offense == t1:
-                                        t2stats.at[possPlayer["id"].item(),"DREB",] += 1
-                                        possTeam = t2
+                                        gs.t2stats.at[gs.possPlayer["id"].item(), "DREB"] += 1
+                                        gs.possTeam = t2
                                         offense = t2
                                         defense = t1
-                                        offense_df = t2onCourt
-                                        defense_df = t1onCourt
-                                        courtPos = (random.randint(2,4),random.randint(2,4))
+                                        offense_df = gs.t2onCourt
+                                        defense_df = gs.t1onCourt
+                                        gs.courtPos = (random.randint(2, 4), random.randint(2, 4))
                                     else:
-                                        t1stats.at[possPlayer["id"].item(),"DREB",] += 1
-                                        possTeam = t1
+                                        gs.t1stats.at[gs.possPlayer["id"].item(), "DREB"] += 1
+                                        gs.possTeam = t1
                                         offense = t1
                                         defense = t2
-                                        offense_df = t1onCourt
-                                        defense_df = t2onCourt
-                                        courtPos = (random.randint(2,4) * -1,random.randint(2,4))
-                                    currShotClock = shotClock
-                                    if currTime <= shotClock:
-                                        currShotClock = currTime
-                                    crossed_midcourt = False
-                                    print(possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " grabs the defensive rebound for " + possTeam)
-                                    defendedPlayerId = None
-                                    currentDefender = None
-                                    previousDefender = None
+                                        offense_df = gs.t1onCourt
+                                        defense_df = gs.t2onCourt
+                                        gs.courtPos = (random.randint(2, 4) * -1, random.randint(2, 4))
+                                    gs.currShotClock = gs.shotClock
+                                    if gs.currTime <= gs.shotClock:
+                                        gs.currShotClock = gs.currTime
+                                    gs.crossed_midcourt = False
+                                    print(
+                                        gs.possPlayer["position"]
+                                        + " "
+                                        + gs.possPlayer["first_name"]
+                                        + " "
+                                        + gs.possPlayer["last_name"]
+                                        + " grabs the defensive rebound for "
+                                        + gs.possTeam
+                                    )
+                                    gs.pbp.append(gs.make_play(rebound, defensive_rebound, ball_carrier=gs.possPlayer))
+                                    gs.defendedPlayerId = None
+                                    gs.currentDefender = None
+                                    gs.previousDefender = None
                             else:
                                 if offense == t1:
-                                    possTeam = t2
-                                    offense = t2
-                                    defense = t1
-                                    offense_df = t2onCourt
-                                    defense_df = t1onCourt
-                                    courtPos = (4,3)
-                                    possPlayer = random.choice(list(t2onCourt.values()))
+                                    gs.possTeam = t2
+                                    offense_df = gs.t2onCourt
+                                    defense_df = gs.t1onCourt
+                                    gs.courtPos = (4, 3)
+                                    gs.possPlayer = random.choice(list(gs.t2onCourt.values()))
                                 else:
-                                    possTeam = t1
-                                    offense = t1
-                                    defense = t2
-                                    offense_df = t1onCourt
-                                    defense_df = t2onCourt
-                                    courtPos = (-4,3)
-                                    possPlayer = random.choice(list(t1onCourt.values()))
-
-                                crossed_midcourt = False
-                                currShotClock = shotClock
-                                if currTime <= shotClock:
-                                    currShotClock = currTime
-                                print(possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " takes the ball out for " + possTeam)
-                                finalHeavePending = True
-                                defendedPlayerId = None
-                                currentDefender = None
-                                previousDefender = None
-
-                            print(t1 + ": " + str(t1pts) + " / " + t2 + ": " + str(t2pts))
+                                    gs.possTeam = t1
+                                    offense_df = gs.t1onCourt
+                                    defense_df = gs.t2onCourt
+                                    gs.courtPos = (-4, 3)
+                                    gs.possPlayer = random.choice(list(gs.t1onCourt.values()))
+                                gs.crossed_midcourt = False
+                                gs.currShotClock = gs.shotClock
+                                if gs.currTime <= gs.shotClock:
+                                    gs.currShotClock = gs.currTime
+                                print(
+                                    gs.possPlayer["position"]
+                                    + " "
+                                    + gs.possPlayer["first_name"]
+                                    + " "
+                                    + gs.possPlayer["last_name"]
+                                    + " takes the ball out for "
+                                    + gs.possTeam
+                                )
+                                gs.pbp.append(gs.make_play(inbound, inbound_success, ball_carrier=gs.possPlayer))
+                                gs.finalHeavePending = True
+                                gs.defendedPlayerId = None
+                                gs.currentDefender = None
+                                gs.previousDefender = None
+                            print(t1 + ": " + str(gs.t1pts) + " / " + t2 + ": " + str(gs.t2pts))
                             print(footerPos)
-                            printMomentumMeter()
+                            gs.printMomentumMeter()
                             took_shot = True
 
-                        elif zone in ["inside","paint","midrange",]:
+                        elif zone in ["inside", "paint", "midrange"]:
                             if zone == "midrange":
                                 shotOffenseType = "shooting2"
-                                (shotOffense,baseShotOffense,shooterStaminaCapacity,shootPlayerMinutes,shooterStaminaUsageRatio,shooterFatiguePenalty,shooterStaminaModifier,) = get_stamina_adjusted_rating(shootPlayer,shotOffenseType,shootPlayerMinutes,shootPlayerRecoveryMinutes)
+                                (
+                                    shotOffense,
+                                    baseShotOffense,
+                                    shooterStaminaCapacity,
+                                    shootPlayerMinutes,
+                                    shooterStaminaUsageRatio,
+                                    shooterFatiguePenalty,
+                                    shooterStaminaModifier,
+                                ) = get_stamina_adjusted_rating(
+                                    shootPlayer, shotOffenseType, shootPlayerMinutes, shootPlayerRecoveryMinutes
+                                )
                                 staminaAdjustedShotOffense = shotOffense
-                                (shotOffense,shotMomentumStrength,shotMomentumBonus,shotMomentumModifier,) = getMomentumAdjustedRating(staminaAdjustedShotOffense,offense)
+                                shotOffense, shotMomentumStrength, shotMomentumBonus, shotMomentumModifier = (
+                                    gs.getMomentumAdjustedRating(staminaAdjustedShotOffense, offense)
+                                )
                                 baseShotChance = (0.0074 * shotOffense) + 0.265
                             else:
                                 shotOffenseType = "finishing"
-                                (shotOffense,baseShotOffense,shooterStaminaCapacity,shootPlayerMinutes,shooterStaminaUsageRatio,shooterFatiguePenalty,shooterStaminaModifier,) = get_stamina_adjusted_rating(shootPlayer,shotOffenseType,shootPlayerMinutes,shootPlayerRecoveryMinutes)
+                                (
+                                    shotOffense,
+                                    baseShotOffense,
+                                    shooterStaminaCapacity,
+                                    shootPlayerMinutes,
+                                    shooterStaminaUsageRatio,
+                                    shooterFatiguePenalty,
+                                    shooterStaminaModifier,
+                                ) = get_stamina_adjusted_rating(
+                                    shootPlayer, shotOffenseType, shootPlayerMinutes, shootPlayerRecoveryMinutes
+                                )
                                 staminaAdjustedShotOffense = shotOffense
-                                (shotOffense,shotMomentumStrength,shotMomentumBonus,shotMomentumModifier,) = getMomentumAdjustedRating(staminaAdjustedShotOffense,offense)
+                                shotOffense, shotMomentumStrength, shotMomentumBonus, shotMomentumModifier = (
+                                    gs.getMomentumAdjustedRating(staminaAdjustedShotOffense, offense)
+                                )
                                 baseShotChance = (0.011 * shotOffense) + 0.39
                             if offense == t1:
-                                baseShotChance += HCAAdj
-                            (shotDefenseAdjustment,shotDefense,shotDefenseType,) = get_shot_defense_adjustment(defender,courtPos,defenderStaminaModifier)
-                            madeShot = max(0.0,min(1.0,baseShotChance + shotDefenseAdjustment + shotClockQualityAdjustment + doubleTeamShotAdjustment))
-
-                            (shootingFoulChance,zoneFoulBaseline,foulDefenderIQ,bbiqFoulModifier,) = get_shooting_foul_chance(defender,courtPos)
+                                baseShotChance += gs.HCAAdj
+                            shotDefenseAdjustment, shotDefense, shotDefenseType = get_shot_defense_adjustment(
+                                defender, gs.courtPos, defenderStaminaModifier
+                            )
+                            madeShot = max(
+                                0.0,
+                                min(
+                                    1.0,
+                                    baseShotChance
+                                    + shotDefenseAdjustment
+                                    + shotClockQualityAdjustment
+                                    + doubleTeamShotAdjustment,
+                                ),
+                            )
+                            shootingFoulChance, zoneFoulBaseline, foulDefenderIQ, bbiqFoulModifier = (
+                                get_shooting_foul_chance(defender, gs.courtPos)
+                            )
                             shootingFoulRoll = random.random()
-                            shootingFoul = (shootingFoulRoll < shootingFoulChance)
+                            shootingFoul = shootingFoulRoll < shootingFoulChance
                             defenderFouledOut = False
                             defenderFoulProtected = False
-
                             if shootingFoul:
                                 defenderStatId = defender["id"].item()
-                                defenderPlayerId = int(defender["player_id"])
-
+                                defenderPlayerId = int(defender["ID"])
                                 if offense == t1:
-                                    t2stats.at[defenderStatId,"Foul",] += 1
-                                    if period == 1:
-                                        t2FirstHalfTeamFouls += 1
-                                        defendingHalfTeamFouls = t2FirstHalfTeamFouls
+                                    gs.t2stats.at[defenderStatId, "Foul"] += 1
+                                    if gs.period == 1:
+                                        gs.t2FirstHalfTeamFouls += 1
+                                        defendingHalfTeamFouls = gs.t2FirstHalfTeamFouls
                                     else:
-                                        t2SecondHalfTeamFouls += 1
-                                        defendingHalfTeamFouls = t2SecondHalfTeamFouls
-
-                                    defenderFoulTotal = int(t2stats.at[defenderStatId,"Foul"])
-                                    if defenderFoulTotal >= foulOutLimit and defenderPlayerId not in t2FouledOutPlayerIds:
-                                        t2FouledOutPlayerIds.add(defenderPlayerId)
+                                        gs.t2SecondHalfTeamFouls += 1
+                                        defendingHalfTeamFouls = gs.t2SecondHalfTeamFouls
+                                    defenderFoulTotal = int(gs.t2stats.at[defenderStatId, "Foul"])
+                                    if (
+                                        defenderFoulTotal >= gs.foulOutLimit
+                                        and defenderPlayerId not in gs.t2FouledOutPlayerIds
+                                    ):
+                                        gs.t2FouledOutPlayerIds.add(defenderPlayerId)
                                         defenderFouledOut = True
-                                    defenderFoulProtected = registerFoulProtection(2,defenderStatId,defenderPlayerId,f"{defender['position']} {defender['first_name']} {defender['last_name']}")
+                                    defenderFoulProtected = gs.registerFoulProtection(
+                                        2,
+                                        defenderStatId,
+                                        defenderPlayerId,
+                                        f"{defender['position']} {defender['first_name']} {defender['last_name']}",
+                                    )
                                 else:
-                                    t1stats.at[defenderStatId,"Foul",] += 1
-                                    if period == 1:
-                                        t1FirstHalfTeamFouls += 1
-                                        defendingHalfTeamFouls = t1FirstHalfTeamFouls
+                                    gs.t1stats.at[defenderStatId, "Foul"] += 1
+                                    if gs.period == 1:
+                                        gs.t1FirstHalfTeamFouls += 1
+                                        defendingHalfTeamFouls = gs.t1FirstHalfTeamFouls
                                     else:
-                                        t1SecondHalfTeamFouls += 1
-                                        defendingHalfTeamFouls = t1SecondHalfTeamFouls
-
-                                    defenderFoulTotal = int(t1stats.at[defenderStatId,"Foul"])
-                                    if defenderFoulTotal >= foulOutLimit and defenderPlayerId not in t1FouledOutPlayerIds:
-                                        t1FouledOutPlayerIds.add(defenderPlayerId)
+                                        gs.t1SecondHalfTeamFouls += 1
+                                        defendingHalfTeamFouls = gs.t1SecondHalfTeamFouls
+                                    defenderFoulTotal = int(gs.t1stats.at[defenderStatId, "Foul"])
+                                    if (
+                                        defenderFoulTotal >= gs.foulOutLimit
+                                        and defenderPlayerId not in gs.t1FouledOutPlayerIds
+                                    ):
+                                        gs.t1FouledOutPlayerIds.add(defenderPlayerId)
                                         defenderFouledOut = True
-                                    defenderFoulProtected = registerFoulProtection(1,defenderStatId,defenderPlayerId,f"{defender['position']} {defender['first_name']} {defender['last_name']}")
+                                    defenderFoulProtected = gs.registerFoulProtection(
+                                        1,
+                                        defenderStatId,
+                                        defenderPlayerId,
+                                        f"{defender['position']} {defender['first_name']} {defender['last_name']}",
+                                    )
                                 print(f"Defending team fouls this half: {defendingHalfTeamFouls}")
-
                                 if defenderFouledOut:
-                                    print(f"{defender['position']} {defender['first_name']} {defender['last_name']} has fouled out with {defenderFoulTotal} fouls!")
-
+                                    print(
+                                        f"{defender['position']} {defender['first_name']} {defender['last_name']} has fouled out with {defenderFoulTotal} fouls!"
+                                    )
                                 blockChance = 0
                                 zoneBlockBaseline = 0
                                 blockRating = baseBlockRating * defenderStaminaModifier
@@ -1683,68 +1257,59 @@ def rungame(gid, home, away, league, HC, gamenum):
                                 blockRoll = None
                                 shotBlocked = False
                             else:
-                                (blockChance, zoneBlockBaseline, blockRating, blockRatingAdjustment, defenderHeight,
-                                 shooterHeight, heightAdjustment,) = get_block_chance(defender, shootPlayer, courtPos,
-                                                                                      defenderStaminaModifier)
+                                (
+                                    blockChance,
+                                    zoneBlockBaseline,
+                                    blockRating,
+                                    blockRatingAdjustment,
+                                    defenderHeight,
+                                    shooterHeight,
+                                    heightAdjustment,
+                                ) = get_block_chance(defender, shootPlayer, gs.courtPos, defenderStaminaModifier)
                                 blockRoll = random.random()
-                                shotBlocked = (blockRoll < blockChance)
-
-                            if shotBlocked:
-                                shotRand = None
-                            else:
-                                shotRand = random.random()
-
+                                shotBlocked = blockRoll < blockChance
+                            shotRand = None if shotBlocked else random.random()
                             if shootingFoul:
                                 madeShot *= shootingFoulMadeShotModifier
-                            shotMade = (not shotBlocked and shotRand < madeShot)
-                            shotRollText = ("SKIPPED" if shotRand is None else f"{shotRand:.4f}")
-                            print(f"Shot offense: {shotOffense:.4f} [{shotOffenseType}; base {baseShotOffense:.2f}; stamina adjusted {staminaAdjustedShotOffense:.4f}; MP {shootPlayerMinutes:.2f}; recovery {shootPlayerRecoveryMinutes:.2f}; fatigue load {shootPlayerFatigueMinutes:.2f}/{shooterStaminaCapacity:.2f}; stamina modifier {shooterStaminaModifier:.3f}; momentum {shotMomentumStrength:.0%}; momentum bonus {shotMomentumBonus:.2%}; momentum modifier {shotMomentumModifier:.3f}] | Shot defense: {shotDefense:.4f} [{shotDefenseType}; MP {defenderMinutes:.2f}; recovery {defenderRecoveryMinutes:.2f}; fatigue load {defenderFatigueMinutes:.2f}/{defenderStaminaCapacity:.2f}; stamina modifier {defenderStaminaModifier:.3f}] | Defense adjustment: {shotDefenseAdjustment:+.2%} | Shot-clock quality: {shotClockQualityLabel} {shotClockQualityAdjustment:+.2%} | Double-team role: {doubleTeamRole} {doubleTeamShotAdjustment:+.2%} | Final shot chance: {madeShot:.2%} | Roll: {shotRollText}")
-                            blockRollText = ("SKIPPED" if blockRoll is None else f"{blockRoll:.4f}")
-
+                            shotMade = not shotBlocked and shotRand is not None and shotRand < madeShot
                             print(
-                                f"Shooting foul baseline: {zoneFoulBaseline:.2%} | "
-                                f"Defender BBIQ: {foulDefenderIQ:.0f} | "
-                                f"BBIQ modifier: {bbiqFoulModifier:.3f} | "
-                                f"Foul chance: {shootingFoulChance:.2%} | "
-                                f"Foul roll: {shootingFoulRoll:.4f} | "
-                                f"{'FOUL' if shootingFoul else 'NO FOUL'}"
+                                f"Shot offense: {shotOffense:.4f} [{shotOffenseType}; base {baseShotOffense:.2f}; stamina adjusted {staminaAdjustedShotOffense:.4f}; MP {shootPlayerMinutes:.2f}; recovery {shootPlayerRecoveryMinutes:.2f}; fatigue load {shootPlayerFatigueMinutes:.2f}/{shooterStaminaCapacity:.2f}; stamina modifier {shooterStaminaModifier:.3f}; momentum {shotMomentumStrength:.0%}; momentum bonus {shotMomentumBonus:.2%}; momentum modifier {shotMomentumModifier:.3f}] | Shot defense: {shotDefense:.4f} [{shotDefenseType}; MP {defenderMinutes:.2f}; recovery {defenderRecoveryMinutes:.2f}; fatigue load {defenderFatigueMinutes:.2f}/{defenderStaminaCapacity:.2f}; stamina modifier {defenderStaminaModifier:.3f}] | Defense adjustment: {shotDefenseAdjustment:+.2%} | Shot-clock quality: {shotClockQualityLabel} {shotClockQualityAdjustment:+.2%} | Double-team role: {doubleTeamRole} {doubleTeamShotAdjustment:+.2%} | Final shot chance: {madeShot:.2%} | Roll: {'SKIPPED' if shotRand is None else f'{shotRand:.4f}'}"
                             )
-
                             print(
-                                f"Block rating: {blockRating:.4f} [base {baseBlockRating:.2f}; MP {defenderMinutes:.2f}; recovery {defenderRecoveryMinutes:.2f}; fatigue load {defenderFatigueMinutes:.2f}/{defenderStaminaCapacity:.2f}; modifier {defenderStaminaModifier:.3f}] | "
-                                f"Zone baseline: {zoneBlockBaseline:.2%} | "
-                                f"Rating adjustment: "
-                                f"{blockRatingAdjustment:+.2%} | "
-                                f"Height: {defenderHeight:.0f} vs "
-                                f"{shooterHeight:.0f} | "
-                                f"Height adjustment: "
-                                f"{heightAdjustment:+.2%} | "
-                                f"Block chance: {blockChance:.2%} | "
-                                f"Block roll: {blockRollText} | "
-                                f"{'BLOCKED' if shotBlocked else 'NOT BLOCKED'}"
+                                f"Shooting foul baseline: {zoneFoulBaseline:.2%} | Defender BBIQ: {foulDefenderIQ:.0f} | BBIQ modifier: {bbiqFoulModifier:.3f} | Foul chance: {shootingFoulChance:.2%} | Foul roll: {shootingFoulRoll:.4f} | {'FOUL' if shootingFoul else 'NO FOUL'}"
                             )
-
+                            print(
+                                f"Block rating: {blockRating:.4f} [base {baseBlockRating:.2f}; MP {defenderMinutes:.2f}; recovery {defenderRecoveryMinutes:.2f}; fatigue load {defenderFatigueMinutes:.2f}/{defenderStaminaCapacity:.2f}; modifier {defenderStaminaModifier:.3f}] | Zone baseline: {zoneBlockBaseline:.2%} | Rating adjustment: {blockRatingAdjustment:+.2%} | Height: {defenderHeight:.0f} vs {shooterHeight:.0f} | Height adjustment: {heightAdjustment:+.2%} | Block chance: {blockChance:.2%} | Block roll: {'SKIPPED' if blockRoll is None else f'{blockRoll:.4f}'} | {'BLOCKED' if shotBlocked else 'NOT BLOCKED'}"
+                            )
                             if not shootingFoul or shotMade:
                                 if offense == t1:
-                                    t12a += 1
+                                    gs.t12a += 1
                                     if zone == "midrange":
-                                        t1stats.at[shootPlayer["id"].item(),"Mid Shot Att",] += 1
+                                        gs.t1stats.at[shootPlayer["id"].item(), "Mid Shot Att"] += 1
                                     else:
-                                        t1stats.at[shootPlayer["id"].item(),"Ins Shot Att",] += 1
+                                        gs.t1stats.at[shootPlayer["id"].item(), "Ins Shot Att"] += 1
                                 else:
-                                    t22a += 1
+                                    gs.t22a += 1
                                     if zone == "midrange":
-                                        t2stats.at[shootPlayer["id"].item(),"Mid Shot Att",] += 1
+                                        gs.t2stats.at[shootPlayer["id"].item(), "Mid Shot Att"] += 1
                                     else:
-                                        t2stats.at[shootPlayer["id"].item(),"Ins Shot Att",] += 1
-
-                            print((str(period) + pInd if period <= periodPerGame else "OT"+str(period-periodPerGame))+ ": "+game_clock_text+ " / Shot Clock: :"+ shot_clock_text+ " ("+ possTeam+ ")")
-                            print(f"2-point attempt from {shootPlayer['position']} {shootPlayer['first_name']} {shootPlayer['last_name']}")
-
+                                        gs.t2stats.at[shootPlayer["id"].item(), "Ins Shot Att"] += 1
+                            print(
+                                periodLabel
+                                + ": "
+                                + game_clock_text
+                                + " / Shot Clock: :"
+                                + shot_clock_text
+                                + " ("
+                                + gs.possTeam
+                                + ")"
+                            )
+                            print(
+                                f"2-point attempt from {shootPlayer['position']} {shootPlayer['first_name']} {shootPlayer['last_name']}"
+                            )
                             if shotMade:
                                 madeShotResult = "normal"
-                                shotMakeQuality = shotRand / madeShot
-
+                                shotMakeQuality = shotRand / madeShot if madeShot > 0 else 1.0
                                 if zone == "inside" and shotMakeQuality < insideDunkThreshold:
                                     madeShotResult = "inside_dunk"
                                 elif zone == "paint":
@@ -1752,1193 +1317,1495 @@ def rungame(gid, home, away, league, HC, gamenum):
                                         madeShotResult = "paint_poster_dunk"
                                     elif shotMakeQuality < paintDriveDunkThreshold:
                                         madeShotResult = "paint_drive_dunk"
-
                                 if offense == t1:
-                                    t1pts += 2
-                                    t12m += 1
+                                    gs.t1pts += 2
+                                    gs.t12m += 1
                                     if zone == "midrange":
-                                        t1stats.at[shootPlayer["id"].item(),"Mid Shot Made",] += 1
+                                        gs.t1stats.at[shootPlayer["id"].item(), "Mid Shot Made"] += 1
                                     else:
-                                        t1stats.at[shootPlayer["id"].item(),"Ins Shot Made",] += 1
-                                    if assistPlayer is not None: t1stats.at[assistPlayer["id"].item(),"Assist",] += 1
-                                    if period == 1:
-                                        t1q1pts += 2
-                                    elif period == 2:
-                                        t1q2pts += 2
-                                    elif league != "CBB" and period == 3:
-                                        t1q3pts += 2
-                                    elif league != "CBB" and period == 4:
-                                        t1q4pts += 2
-                                    elif period > periodPerGame:
-                                        t1qotpts += 2
+                                        gs.t1stats.at[shootPlayer["id"].item(), "Ins Shot Made"] += 1
+                                    if gs.assistPlayer is not None:
+                                        gs.t1stats.at[gs.assistPlayer["id"].item(), "Assist"] += 1
+                                    if gs.period == 1:
+                                        gs.t1q1pts += 2
+                                    elif gs.period == 2:
+                                        gs.t1q2pts += 2
+                                    elif gs.league != "CBB" and gs.period == 3:
+                                        gs.t1q3pts += 2
+                                    elif gs.league != "CBB" and gs.period == 4:
+                                        gs.t1q4pts += 2
+                                    elif gs.period > gs.periodPerGame:
+                                        gs.t1qotpts += 2
                                 else:
-                                    t2pts += 2
-                                    t22m += 1
+                                    gs.t2pts += 2
+                                    gs.t22m += 1
                                     if zone == "midrange":
-                                        t2stats.at[shootPlayer["id"].item(),"Mid Shot Made",] += 1
+                                        gs.t2stats.at[shootPlayer["id"].item(), "Mid Shot Made"] += 1
                                     else:
-                                        t2stats.at[shootPlayer["id"].item(),"Ins Shot Made",] += 1
-                                    if assistPlayer is not None: t2stats.at[assistPlayer["id"].item(),"Assist",] += 1
-                                    if period == 1:
-                                        t2q1pts += 2
-                                    elif period == 2:
-                                        t2q2pts += 2
-                                    elif league != "CBB" and period == 3:
-                                        t2q3pts += 2
-                                    elif league != "CBB" and period == 4:
-                                        t2q4pts += 2
-                                    elif period > periodPerGame:
-                                        t2qotpts += 2
-
-                                assistText = ""
-                                if assistPlayer is not None:
-                                    assistText = f" Assisted by {assistPlayer['position']} {assistPlayer['first_name']} {assistPlayer['last_name']}."
-
+                                        gs.t2stats.at[shootPlayer["id"].item(), "Ins Shot Made"] += 1
+                                    if gs.assistPlayer is not None:
+                                        gs.t2stats.at[gs.assistPlayer["id"].item(), "Assist"] += 1
+                                    if gs.period == 1:
+                                        gs.t2q1pts += 2
+                                    elif gs.period == 2:
+                                        gs.t2q2pts += 2
+                                    elif gs.league != "CBB" and gs.period == 3:
+                                        gs.t2q3pts += 2
+                                    elif gs.league != "CBB" and gs.period == 4:
+                                        gs.t2q4pts += 2
+                                    elif gs.period > gs.periodPerGame:
+                                        gs.t2qotpts += 2
+                                assistText = (
+                                    f" Assisted by {gs.assistPlayer['position']} {gs.assistPlayer['first_name']} {gs.assistPlayer['last_name']}."
+                                    if gs.assistPlayer is not None
+                                    else ""
+                                )
                                 if madeShotResult == "inside_dunk":
-                                    print(f"...{shootPlayer['position']} {shootPlayer['first_name']} {shootPlayer['last_name']} slams it home!{assistText}")
+                                    print(
+                                        f"...{shootPlayer['position']} {shootPlayer['first_name']} {shootPlayer['last_name']} slams it home!{assistText}"
+                                    )
                                 elif madeShotResult == "paint_poster_dunk":
-                                    print(f"...{shootPlayer['position']} {shootPlayer['first_name']} {shootPlayer['last_name']} drives forward and POSTERIZES {defender['position']} {defender['first_name']} {defender['last_name']}! THE DISRESPECT!{assistText}")
+                                    print(
+                                        f"...{shootPlayer['position']} {shootPlayer['first_name']} {shootPlayer['last_name']} drives forward and POSTERIZES {defender['position']} {defender['first_name']} {defender['last_name']}! THE DISRESPECT!{assistText}"
+                                    )
                                 elif madeShotResult == "paint_drive_dunk":
-                                    print(f"...{shootPlayer['position']} {shootPlayer['first_name']} {shootPlayer['last_name']} drives forward and throws it down!{assistText}")
-                                elif assistPlayer is not None:
-                                    print(f"...GOOD! Assisted by {assistPlayer['position']} {assistPlayer['first_name']} {assistPlayer['last_name']}")
+                                    print(
+                                        f"...{shootPlayer['position']} {shootPlayer['first_name']} {shootPlayer['last_name']} drives forward and throws it down!{assistText}"
+                                    )
+                                elif gs.assistPlayer is not None:
+                                    print(
+                                        f"...GOOD! Assisted by {gs.assistPlayer['position']} {gs.assistPlayer['first_name']} {gs.assistPlayer['last_name']}"
+                                    )
                                 else:
                                     print("...GOOD!")
-                                if madeShotResult in ("inside_dunk","paint_drive_dunk"):
-                                    adjustMomentum(offense,momentumDunkSwing,"made dunk")
+                                if madeShotResult in ("inside_dunk", "paint_drive_dunk"):
+                                    gs.adjustMomentum(offense, momentumDunkSwing, "made dunk")
                                 elif madeShotResult == "paint_poster_dunk":
-                                    adjustMomentum(offense,momentumPosterDunkSwing,"poster dunk")
+                                    gs.adjustMomentum(offense, momentumPosterDunkSwing, "poster dunk")
                                 else:
-                                    adjustMomentum(offense,momentumMadeTwoSwing,"made two-point shot")
+                                    gs.adjustMomentum(offense, momentumMadeTwoSwing, "made two-point shot")
                             else:
                                 if shotBlocked:
                                     if offense == t1:
-                                        t2stats.at[defender["id"].item(),"Blk",] += 1
+                                        gs.t2stats.at[defender["id"].item(), "Blk"] += 1
                                     else:
-                                        t1stats.at[defender["id"].item(),"Blk",] += 1
-                                    print(f"...BLOCKED by {defender['position']} {defender['first_name']} {defender['last_name']}!")
-                                    adjustMomentum(defense,momentumBlockSwing,"blocked two-point shot")
+                                        gs.t1stats.at[defender["id"].item(), "Blk"] += 1
+                                    print(
+                                        f"...BLOCKED by {defender['position']} {defender['first_name']} {defender['last_name']}!"
+                                    )
+                                    gs.adjustMomentum(defense, momentumBlockSwing, "blocked two-point shot")
                                 elif shootingFoul:
                                     print("...MISSED, but a shooting foul is called!")
-                                    adjustMomentum(defense,momentumMissSwing,"missed two-point shot")
+                                    gs.adjustMomentum(defense, momentumMissSwing, "missed two-point shot")
                                 else:
                                     print("...MISSED!")
-                                    adjustMomentum(defense,momentumMissSwing,"missed two-point shot")
-
-                            assistPlayer = None
+                                    gs.adjustMomentum(defense, momentumMissSwing, "missed two-point shot")
+                            _evt = shot_inside if zone == "inside" else (shot_paint if zone == "paint" else shot_midrange)
+                            _out = (shot_foul_made if shootingFoul else shot_made) if shotMade else (shot_blocked if shotBlocked else (shot_foul_missed if shootingFoul else shot_missed))
+                            gs.pbp.append(gs.make_play(_evt, _out, elapsed=elapsedTime, ball_carrier=shootPlayer, defender=defender, blocking_id=int(defender["ID"]) if shotBlocked else 0, fouling_id=int(defender["ID"]) if shootingFoul else 0))
+                            if shotMade:
+                                gs.updateLargestLeads()
+                            gs.assistPlayer = None
                             freeThrowsAwarded = 0
                             lastFreeThrowMade = False
-
                             if shootingFoul:
                                 freeThrowsAwarded = 1 if shotMade else 2
-                                print(f"FOUL on {defender['position']} {defender['first_name']} {defender['last_name']}! {shootPlayer['position']} {shootPlayer['first_name']} {shootPlayer['last_name']} will shoot {freeThrowsAwarded} free throw{'s' if freeThrowsAwarded != 1 else ''}.")
-                                shootingFoulMediaTimeoutTaken = checkTimeoutStoppage(offense,True,shootPlayer)
-                                freeThrowSubsCompleted = shootingFoulMediaTimeoutTaken
-                                if (defenderFouledOut or defenderFoulProtected) and not freeThrowSubsCompleted:
-                                    pullFreeThrowSubs(shootPlayer)
-                                    freeThrowSubsCompleted = True
-                                    defendedPlayerId = None
-                                    currentDefender = None
-                                    previousDefender = None
-                                elif freeThrowsAwarded == 1 and not freeThrowSubsCompleted:
-                                    pullFreeThrowSubs(shootPlayer)
-                                    freeThrowSubsCompleted = True
+                                print(
+                                    f"FOUL on {defender['position']} {defender['first_name']} {defender['last_name']}! {shootPlayer['position']} {shootPlayer['first_name']} {shootPlayer['last_name']} will shoot {freeThrowsAwarded} free throw{'s' if freeThrowsAwarded != 1 else ''}."
+                                )
+                                ftMediaTimeout = gs.checkTimeoutStoppage(offense, True, shootPlayer)
+                                ftSubsCompleted = ftMediaTimeout
+                                if (defenderFouledOut or defenderFoulProtected) and not ftSubsCompleted:
+                                    gs.pullFreeThrowSubs(shootPlayer)
+                                    ftSubsCompleted = True
+                                    gs.defendedPlayerId = None
+                                    gs.currentDefender = None
+                                    gs.previousDefender = None
+                                elif freeThrowsAwarded == 1 and not ftSubsCompleted:
+                                    gs.pullFreeThrowSubs(shootPlayer)
+                                    ftSubsCompleted = True
                                 if offense == t1:
-                                    offense_df = t1onCourt
-                                    defense_df = t2onCourt
-                                    freeThrowStats = t1stats
+                                    offense_df = gs.t1onCourt
+                                    defense_df = gs.t2onCourt
+                                    ftStats = gs.t1stats
                                 else:
-                                    offense_df = t2onCourt
-                                    defense_df = t1onCourt
-                                    freeThrowStats = t2stats
-
-                                shootPlayerMinutes = float(freeThrowStats.at[shootPlayer["id"].item(),"MP"]) / 60
-                                shootPlayerRecoveryMinutes = getPlayerRecoveryMinutes(shootPlayer)
-                                shootPlayerFatigueMinutes = max(0.0,shootPlayerMinutes - shootPlayerRecoveryMinutes)
-                                (_,_,shooterStaminaCapacity,shootPlayerMinutes,shooterStaminaUsageRatio,shooterFatiguePenalty,shooterStaminaModifier,) = get_stamina_adjusted_rating(shootPlayer,"free_throw",shootPlayerMinutes,shootPlayerRecoveryMinutes)
-                                freeThrowHCAAdjustment = HCAAdj if offense == t1 else 0
-
-                                for freeThrowNumber in range(1,freeThrowsAwarded + 1):
-                                    (freeThrowMade, freeThrowChance, freeThrowRoll, freeThrowRating,
-                                     baseFreeThrowRating,) = resolve_free_throw(shootPlayer, freeThrowHCAAdjustment,
-                                                                                shooterStaminaModifier)
-
+                                    offense_df = gs.t2onCourt
+                                    defense_df = gs.t1onCourt
+                                    ftStats = gs.t2stats
+                                shootPlayerMinutes = float(ftStats.at[shootPlayer["id"].item(), "MP"]) / 60
+                                shootPlayerRecoveryMinutes = gs.getPlayerRecoveryMinutes(shootPlayer)
+                                shootPlayerFatigueMinutes = max(0.0, shootPlayerMinutes - shootPlayerRecoveryMinutes)
+                                (
+                                    _,
+                                    _,
+                                    shooterStaminaCapacity,
+                                    shootPlayerMinutes,
+                                    shooterStaminaUsageRatio,
+                                    shooterFatiguePenalty,
+                                    shooterStaminaModifier,
+                                ) = get_stamina_adjusted_rating(
+                                    shootPlayer, "free_throw", shootPlayerMinutes, shootPlayerRecoveryMinutes
+                                )
+                                ftHCA = gs.HCAAdj if offense == t1 else 0
+                                for ftNum in range(1, freeThrowsAwarded + 1):
+                                    ftMade, ftChance, ftRoll, ftRating, baseFTRating = resolve_free_throw(
+                                        shootPlayer, ftHCA, shooterStaminaModifier
+                                    )
                                     if offense == t1:
-                                        t1stats.at[shootPlayer["id"].item(),"FT Shot Att",] += 1
+                                        gs.t1stats.at[shootPlayer["id"].item(), "FT Shot Att"] += 1
                                     else:
-                                        t2stats.at[shootPlayer["id"].item(),"FT Shot Att",] += 1
-
-                                    if freeThrowMade:
+                                        gs.t2stats.at[shootPlayer["id"].item(), "FT Shot Att"] += 1
+                                    if ftMade:
                                         if offense == t1:
-                                            t1pts += 1
-                                            t1stats.at[shootPlayer["id"].item(),"FT Shot Made",] += 1
-                                            if period == 1:
-                                                t1q1pts += 1
-                                            elif period == 2:
-                                                t1q2pts += 1
-                                            elif league != "CBB" and period == 3:
-                                                t1q3pts += 1
-                                            elif league != "CBB" and period == 4:
-                                                t1q4pts += 1
-                                            elif period > periodPerGame:
-                                                t1qotpts += 1
+                                            gs.t1pts += 1
+                                            gs.t1stats.at[shootPlayer["id"].item(), "FT Shot Made"] += 1
+                                            if gs.period == 1:
+                                                gs.t1q1pts += 1
+                                            elif gs.period == 2:
+                                                gs.t1q2pts += 1
+                                            elif gs.league != "CBB" and gs.period == 3:
+                                                gs.t1q3pts += 1
+                                            elif gs.league != "CBB" and gs.period == 4:
+                                                gs.t1q4pts += 1
+                                            elif gs.period > gs.periodPerGame:
+                                                gs.t1qotpts += 1
                                         else:
-                                            t2pts += 1
-                                            t2stats.at[shootPlayer["id"].item(),"FT Shot Made",] += 1
-                                            if period == 1:
-                                                t2q1pts += 1
-                                            elif period == 2:
-                                                t2q2pts += 1
-                                            elif league != "CBB" and period == 3:
-                                                t2q3pts += 1
-                                            elif league != "CBB" and period == 4:
-                                                t2q4pts += 1
-                                            elif period > periodPerGame:
-                                                t2qotpts += 1
-
-                                    print(f"Free throw {freeThrowNumber} of {freeThrowsAwarded}: rating {freeThrowRating:.4f} [base {baseFreeThrowRating:.2f}; MP {shootPlayerMinutes:.2f}; recovery {shootPlayerRecoveryMinutes:.2f}; fatigue load {shootPlayerFatigueMinutes:.2f}/{shooterStaminaCapacity:.2f}; modifier {shooterStaminaModifier:.3f}] | Chance: {freeThrowChance:.2%} | Roll: {freeThrowRoll:.4f} | {'GOOD' if freeThrowMade else 'MISSED'}")
-                                    lastFreeThrowMade = freeThrowMade
-                                    if freeThrowNumber == 1 and freeThrowsAwarded > 1 and not freeThrowSubsCompleted:
-                                        pullFreeThrowSubs(shootPlayer)
-                                        freeThrowSubsCompleted = True
+                                            gs.t2pts += 1
+                                            gs.t2stats.at[shootPlayer["id"].item(), "FT Shot Made"] += 1
+                                            if gs.period == 1:
+                                                gs.t2q1pts += 1
+                                            elif gs.period == 2:
+                                                gs.t2q2pts += 1
+                                            elif gs.league != "CBB" and gs.period == 3:
+                                                gs.t2q3pts += 1
+                                            elif gs.league != "CBB" and gs.period == 4:
+                                                gs.t2q4pts += 1
+                                            elif gs.period > gs.periodPerGame:
+                                                gs.t2qotpts += 1
+                                    print(
+                                        f"Free throw {ftNum} of {freeThrowsAwarded}: rating {ftRating:.4f} [base {baseFTRating:.2f}; MP {shootPlayerMinutes:.2f}; recovery {shootPlayerRecoveryMinutes:.2f}; fatigue load {shootPlayerFatigueMinutes:.2f}/{shooterStaminaCapacity:.2f}; modifier {shooterStaminaModifier:.3f}] | Chance: {ftChance:.2%} | Roll: {ftRoll:.4f} | {'GOOD' if ftMade else 'MISSED'}"
+                                    )
+                                    lastFreeThrowMade = ftMade
+                                    gs.pbp.append(gs.make_play(free_throw, ft_made if ftMade else ft_missed, ball_carrier=shootPlayer, fouling_id=int(defender["ID"])))
+                                    if ftMade:
+                                        gs.updateLargestLeads()
+                                    if ftNum == 1 and freeThrowsAwarded > 1 and not ftSubsCompleted:
+                                        gs.pullFreeThrowSubs(shootPlayer)
+                                        ftSubsCompleted = True
                                         if offense == t1:
-                                            offense_df = t1onCourt
-                                            defense_df = t2onCourt
+                                            offense_df = gs.t1onCourt
+                                            defense_df = gs.t2onCourt
                                         else:
-                                            offense_df = t2onCourt
-                                            defense_df = t1onCourt
-
-                            needsRebound = ((not shootingFoul and not shotMade) or (shootingFoul and not lastFreeThrowMade))
+                                            offense_df = gs.t2onCourt
+                                            defense_df = gs.t1onCourt
+                            needsRebound = (not shootingFoul and not shotMade) or (
+                                shootingFoul and not lastFreeThrowMade
+                            )
                             if needsRebound:
                                 rebRand = random.random()
-                                if offense == t1:
-                                    offensiveReboundChance = lineupParameters["t1OffensiveRebound"]
-                                else:
-                                    offensiveReboundChance = lineupParameters["t2OffensiveRebound"]
-
+                                offensiveReboundChance = gs.lineupParameters[
+                                    "t1OffensiveRebound" if offense == t1 else "t2OffensiveRebound"
+                                ]
                                 if rebRand < offensiveReboundChance:
-                                    possPlayer = random.choice(list(offense_df.values()))
+                                    gs.possPlayer = random.choice(list(offense_df.values()))
                                     if offense == t1:
-                                        t1stats.at[possPlayer["id"].item(),"OREB",] += 1
+                                        gs.t1stats.at[gs.possPlayer["id"].item(), "OREB"] += 1
                                     else:
-                                        t2stats.at[possPlayer["id"].item(),"OREB",] += 1
-                                    print(possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " grabs the offensive rebound for " + possTeam)
-                                    currShotClock = shotClockReset
-                                    if currTime < currShotClock:
-                                        currShotClock = currTime
+                                        gs.t2stats.at[gs.possPlayer["id"].item(), "OREB"] += 1
+                                    print(
+                                        gs.possPlayer["position"]
+                                        + " "
+                                        + gs.possPlayer["first_name"]
+                                        + " "
+                                        + gs.possPlayer["last_name"]
+                                        + " grabs the offensive rebound for "
+                                        + gs.possTeam
+                                    )
+                                    gs.pbp.append(gs.make_play(rebound, offensive_rebound, ball_carrier=gs.possPlayer))
+                                    gs.currShotClock = gs.shotClockReset
+                                    if gs.currTime < gs.currShotClock:
+                                        gs.currShotClock = gs.currTime
                                 else:
-                                    possPlayer = random.choice(list(defense_df.values()))
+                                    gs.possPlayer = random.choice(list(defense_df.values()))
                                     if offense == t1:
-                                        t2stats.at[possPlayer["id"].item(),"DREB",] += 1
-                                        possTeam = t2
+                                        gs.t2stats.at[gs.possPlayer["id"].item(), "DREB"] += 1
+                                        gs.possTeam = t2
                                         offense = t2
                                         defense = t1
-                                        offense_df = t2onCourt
-                                        defense_df = t1onCourt
-                                        courtPos = (random.randint(2,4),random.randint(2,4))
+                                        offense_df = gs.t2onCourt
+                                        defense_df = gs.t1onCourt
+                                        gs.courtPos = (random.randint(2, 4), random.randint(2, 4))
                                     else:
-                                        t1stats.at[possPlayer["id"].item(),"DREB",] += 1
-                                        possTeam = t1
+                                        gs.t1stats.at[gs.possPlayer["id"].item(), "DREB"] += 1
+                                        gs.possTeam = t1
                                         offense = t1
                                         defense = t2
-                                        offense_df = t1onCourt
-                                        defense_df = t2onCourt
-                                        courtPos = (random.randint(2,4) * -1,random.randint(2,4))
-
-                                    currShotClock = shotClock
-                                    if currTime <= shotClock:
-                                        currShotClock = currTime
-                                    crossed_midcourt = False
-                                    print(possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " grabs the defensive rebound for " + possTeam)
-                                    defendedPlayerId = None
-                                    currentDefender = None
-                                    previousDefender = None
+                                        offense_df = gs.t1onCourt
+                                        defense_df = gs.t2onCourt
+                                        gs.courtPos = (random.randint(2, 4) * -1, random.randint(2, 4))
+                                    gs.currShotClock = gs.shotClock
+                                    if gs.currTime <= gs.shotClock:
+                                        gs.currShotClock = gs.currTime
+                                    gs.crossed_midcourt = False
+                                    print(
+                                        gs.possPlayer["position"]
+                                        + " "
+                                        + gs.possPlayer["first_name"]
+                                        + " "
+                                        + gs.possPlayer["last_name"]
+                                        + " grabs the defensive rebound for "
+                                        + gs.possTeam
+                                    )
+                                    gs.pbp.append(gs.make_play(rebound, defensive_rebound, ball_carrier=gs.possPlayer))
+                                    gs.defendedPlayerId = None
+                                    gs.currentDefender = None
+                                    gs.previousDefender = None
                             else:
                                 if offense == t1:
-                                    possTeam = t2
-                                    offense = t2
-                                    defense = t1
-                                    offense_df = t2onCourt
-                                    defense_df = t1onCourt
-                                    courtPos = (4,3)
-                                    possPlayer = random.choice(list(t2onCourt.values()))
+                                    gs.possTeam = t2
+                                    offense_df = gs.t2onCourt
+                                    defense_df = gs.t1onCourt
+                                    gs.courtPos = (4, 3)
+                                    gs.possPlayer = random.choice(list(gs.t2onCourt.values()))
                                 else:
-                                    possTeam = t1
-                                    offense = t1
-                                    defense = t2
-                                    offense_df = t1onCourt
-                                    defense_df = t2onCourt
-                                    courtPos = (-4,3)
-                                    possPlayer = random.choice(list(t1onCourt.values()))
-
-                                crossed_midcourt = False
-                                currShotClock = shotClock
-                                if currTime <= shotClock:
-                                    currShotClock = currTime
-                                print(possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " takes the ball out for " + possTeam)
-                                finalHeavePending = True
-                                defendedPlayerId = None
-                                currentDefender = None
-                                previousDefender = None
-
-                            print(t1 + ": " + str(t1pts) + " / " + t2 + ": " + str(t2pts))
+                                    gs.possTeam = t1
+                                    offense_df = gs.t1onCourt
+                                    defense_df = gs.t2onCourt
+                                    gs.courtPos = (-4, 3)
+                                    gs.possPlayer = random.choice(list(gs.t1onCourt.values()))
+                                gs.crossed_midcourt = False
+                                gs.currShotClock = gs.shotClock
+                                if gs.currTime <= gs.shotClock:
+                                    gs.currShotClock = gs.currTime
+                                print(
+                                    gs.possPlayer["position"]
+                                    + " "
+                                    + gs.possPlayer["first_name"]
+                                    + " "
+                                    + gs.possPlayer["last_name"]
+                                    + " takes the ball out for "
+                                    + gs.possTeam
+                                )
+                                gs.pbp.append(gs.make_play(inbound, inbound_success, ball_carrier=gs.possPlayer))
+                                gs.finalHeavePending = True
+                                gs.defendedPlayerId = None
+                                gs.currentDefender = None
+                                gs.previousDefender = None
+                            print(t1 + ": " + str(gs.t1pts) + " / " + t2 + ": " + str(gs.t2pts))
                             print(footerPos)
-                            printMomentumMeter()
+                            gs.printMomentumMeter()
                             took_shot = True
 
-
-            if took_shot is False:
-                if currShotClock <= 0 and action != "shot" and currTime > 0:
+            if not took_shot:
+                if gs.currShotClock <= 0 and action != "shot" and gs.currTime > 0:
                     print("Shot clock violation.")
-                    checkTimeoutStoppage(defense,False)
-                    assistPlayer = None
-                    currShotClock = shotClock
-                    if currTime <= shotClock:
-                        currShotClock = currTime
-                    crossed_midcourt = False
+                    violatingPlayer = gs.possPlayer
+                    violationTeamId = int((gs.t1team_df if offense == t1 else gs.t2team_df)["id"].iloc[0])
+                    gs.checkTimeoutStoppage(defense, False)
+                    gs.assistPlayer = None
+                    gs.currShotClock = gs.shotClock
+                    if gs.currTime <= gs.shotClock:
+                        gs.currShotClock = gs.currTime
+                    gs.crossed_midcourt = False
                     if offense == t1:
-                        t1stats.at[possPlayer['id'].item(), 'TO'] += 1
-                        takeoutPlayer = random.choice(list(t2onCourt.values()))
-                        possPlayer = takeoutPlayer
-                        possTeam = t2
-                        offense = t2
-                        defense = t1
-                        offense_df = t2onCourt
-                        defense_df = t1onCourt
-                        courtPos = (4, 3)
-                        print(possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " takes over for " + t2 + ".")
+                        gs.t1stats.at[gs.possPlayer['id'].item(), 'TO'] += 1
+                        gs.possPlayer = random.choice(list(gs.t2onCourt.values()))
+                        gs.possTeam = t2
+                        offense_df = gs.t2onCourt
+                        defense_df = gs.t1onCourt
+                        gs.courtPos = (4, 3)
+                        print(
+                            gs.possPlayer["position"]
+                            + " "
+                            + gs.possPlayer["first_name"]
+                            + " "
+                            + gs.possPlayer["last_name"]
+                            + " takes over for "
+                            + t2
+                            + "."
+                        )
                     else:
-                        t2stats.at[possPlayer['id'].item(), 'TO'] += 1
-                        takeoutPlayer = random.choice(list(t1onCourt.values()))
-                        possPlayer = takeoutPlayer
-                        possTeam = t1
-                        offense = t1
-                        defense = t2
-                        offense_df = t1onCourt
-                        defense_df = t2onCourt
-                        courtPos = (-4, 3)
-                        print(possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " takes over for " + t1 + ".")
-                    finalHeavePending = True
+                        gs.t2stats.at[gs.possPlayer['id'].item(), 'TO'] += 1
+                        gs.possPlayer = random.choice(list(gs.t1onCourt.values()))
+                        gs.possTeam = t1
+                        offense_df = gs.t1onCourt
+                        defense_df = gs.t2onCourt
+                        gs.courtPos = (-4, 3)
+                        print(
+                            gs.possPlayer["position"]
+                            + " "
+                            + gs.possPlayer["first_name"]
+                            + " "
+                            + gs.possPlayer["last_name"]
+                            + " takes over for "
+                            + t1
+                            + "."
+                        )
+                    gs.pbp.append(gs.make_play(turnover, shot_clock_violation, elapsed=elapsedTime, ball_carrier=violatingPlayer, team_id=violationTeamId))
+                    gs.finalHeavePending = True
 
                 else:
                     if action == "move":
-                        if assistPlayer is not None:
-                            assistMovementCount += 1
-                            if assistMovementCount > 1:
-                                assistPlayer = None
-                                assistMovementCount = 0
-                        formationDestinationWeights = t1FormationDestinationWeights if offense == t1 else t2FormationDestinationWeights
-                        activeDestinationWeights,activeLineupPreferences = getActiveDestinationWeights(offense_df,formationDestinationWeights)
-                        newPos = choose_weighted_move_spot(team_side,courtPos,crossed_midcourt,activeDestinationWeights)
+                        if gs.assistPlayer is not None:
+                            gs.assistMovementCount += 1
+                            if gs.assistMovementCount > 1:
+                                gs.assistPlayer = None
+                                gs.assistMovementCount = 0
+                        formationWeights = (
+                            gs.t1FormationDestinationWeights if offense == t1 else gs.t2FormationDestinationWeights
+                        )
+                        activeDestinationWeights, activeLineupPreferences = gs.getActiveDestinationWeights(
+                            offense_df, formationWeights
+                        )
+                        newPos = choose_weighted_move_spot(
+                            team_side, gs.courtPos, gs.crossed_midcourt, activeDestinationWeights
+                        )
                         if newPos is not None:
-                            (offensiveFoulChance,offensiveFoulBaseline,offensivePlayerIQ,offensiveBBIQModifier,offensiveFoulDefenderIQ,offensiveFoulDefenderBBIQModifier,) = get_offensive_foul_chance(possPlayer,defender,newPos)
+                            (
+                                offensiveFoulChance,
+                                offensiveFoulBaseline,
+                                offensivePlayerIQ,
+                                offensiveBBIQModifier,
+                                offensiveFoulDefenderIQ,
+                                offensiveFoulDefenderBBIQModifier,
+                            ) = get_offensive_foul_chance(gs.possPlayer, defender, newPos)
                             offensiveFoulRoll = random.random()
-                            offensiveFoul = (offensiveFoulRoll < offensiveFoulChance)
-
+                            offensiveFoul = offensiveFoulRoll < offensiveFoulChance
                             print(
-                                f"Offensive foul baseline: {offensiveFoulBaseline:.2%} | "
-                                f"Offensive BBIQ: {offensivePlayerIQ:.0f} | "
-                                f"Offensive modifier: {offensiveBBIQModifier:.3f} | "
-                                f"Defender BBIQ: {offensiveFoulDefenderIQ:.0f} | "
-                                f"Defender modifier: {offensiveFoulDefenderBBIQModifier:.3f} | "
-                                f"Foul chance: {offensiveFoulChance:.2%} | "
-                                f"Foul roll: {offensiveFoulRoll:.4f} | "
-                                f"{'CHARGE' if offensiveFoul else 'NO OFFENSIVE FOUL'}"
+                                f"Offensive foul baseline: {offensiveFoulBaseline:.2%} | Offensive BBIQ: {offensivePlayerIQ:.0f} | Offensive modifier: {offensiveBBIQModifier:.3f} | Defender BBIQ: {offensiveFoulDefenderIQ:.0f} | Defender modifier: {offensiveFoulDefenderBBIQModifier:.3f} | Foul chance: {offensiveFoulChance:.2%} | Foul roll: {offensiveFoulRoll:.4f} | {'CHARGE' if offensiveFoul else 'NO OFFENSIVE FOUL'}"
                             )
-
                             if not offensiveFoul:
-                                (nonShootingFoulChance,zoneFoulBaseline,foulDefenderIQ,bbiqFoulModifier,) = get_non_shooting_foul_chance(defender,newPos)
+                                nonShootingFoulChance, zoneFoulBaseline, foulDefenderIQ, bbiqFoulModifier = (
+                                    get_non_shooting_foul_chance(defender, newPos)
+                                )
                                 nonShootingFoulRoll = random.random()
-                                nonShootingFoul = (nonShootingFoulRoll < nonShootingFoulChance)
-
+                                nonShootingFoul = nonShootingFoulRoll < nonShootingFoulChance
                                 print(
-                                    f"Non-shooting foul baseline: {zoneFoulBaseline:.2%} | "
-                                    f"Defender BBIQ: {foulDefenderIQ:.0f} | "
-                                    f"BBIQ modifier: {bbiqFoulModifier:.3f} | "
-                                    f"Foul chance: {nonShootingFoulChance:.2%} | "
-                                    f"Foul roll: {nonShootingFoulRoll:.4f} | "
-                                    f"{'FOUL' if nonShootingFoul else 'NO FOUL'}"
+                                    f"Non-shooting foul baseline: {zoneFoulBaseline:.2%} | Defender BBIQ: {foulDefenderIQ:.0f} | BBIQ modifier: {bbiqFoulModifier:.3f} | Foul chance: {nonShootingFoulChance:.2%} | Foul roll: {nonShootingFoulRoll:.4f} | {'FOUL' if nonShootingFoul else 'NO FOUL'}"
                                 )
                                 if not nonShootingFoul:
-                                    offenseStats = t1stats if offense == t1 else t2stats
-                                    defenseStats = t2stats if offense == t1 else t1stats
-
-                                    possPlayerMinutes = float(offenseStats.at[possPlayer["id"].item(),"MP"]) / 60
-                                    defenderMinutes = float(defenseStats.at[defender["id"].item(),"MP"]) / 60
-                                    possPlayerRecoveryMinutes = getPlayerRecoveryMinutes(possPlayer)
-                                    defenderRecoveryMinutes = getPlayerRecoveryMinutes(defender)
-                                    possPlayerFatigueMinutes = max(0.0,possPlayerMinutes - possPlayerRecoveryMinutes)
-                                    defenderFatigueMinutes = max(0.0,defenderMinutes - defenderRecoveryMinutes)
-
-                                    (movementOffense,baseMovementOffense,offensiveStaminaCapacity,possPlayerMinutes,offensiveStaminaUsageRatio,offensiveFatiguePenalty,offensiveStaminaModifier,) = get_stamina_adjusted_rating(possPlayer,"agility",possPlayerMinutes,possPlayerRecoveryMinutes)
+                                    offenseStats = gs.t1stats if offense == t1 else gs.t2stats
+                                    defenseStats = gs.t2stats if offense == t1 else gs.t1stats
+                                    possPlayerMinutes = float(offenseStats.at[gs.possPlayer["id"].item(), "MP"]) / 60
+                                    defenderMinutes = float(defenseStats.at[defender["id"].item(), "MP"]) / 60
+                                    possPlayerRecoveryMinutes = gs.getPlayerRecoveryMinutes(gs.possPlayer)
+                                    defenderRecoveryMinutes = gs.getPlayerRecoveryMinutes(defender)
+                                    possPlayerFatigueMinutes = max(0.0, possPlayerMinutes - possPlayerRecoveryMinutes)
+                                    defenderFatigueMinutes = max(0.0, defenderMinutes - defenderRecoveryMinutes)
+                                    (
+                                        movementOffense,
+                                        baseMovementOffense,
+                                        offensiveStaminaCapacity,
+                                        possPlayerMinutes,
+                                        offensiveStaminaUsageRatio,
+                                        offensiveFatiguePenalty,
+                                        offensiveStaminaModifier,
+                                    ) = get_stamina_adjusted_rating(
+                                        gs.possPlayer, "agility", possPlayerMinutes, possPlayerRecoveryMinutes
+                                    )
                                     movementOffenseType = "agility"
                                     staminaAdjustedMovementOffense = movementOffense
-                                    (movementOffense,movementMomentumStrength,movementMomentumBonus,movementMomentumModifier,) = getMomentumAdjustedRating(staminaAdjustedMovementOffense,offense)
-
-                                    (_,_,defenderStaminaCapacity,defenderMinutes,defenderStaminaUsageRatio,defenderFatiguePenalty,defenderStaminaModifier,) = get_stamina_adjusted_rating(defender,"perimeter_defense",defenderMinutes,defenderRecoveryMinutes)
-
-                                    baseMovementDefense,movementDefenseType = get_movement_defense(defender,newPos)
-                                    movementDefense,movementDefenseType = get_movement_defense(defender,newPos,defenderStaminaModifier)
-
-                                    movementSuccessProbability = (
-                                        get_movement_success_probability(
-                                            movementOffense,
-                                            movementDefense,
-                                        )
+                                    (
+                                        movementOffense,
+                                        movementMomentumStrength,
+                                        movementMomentumBonus,
+                                        movementMomentumModifier,
+                                    ) = gs.getMomentumAdjustedRating(staminaAdjustedMovementOffense, offense)
+                                    (
+                                        _,
+                                        _,
+                                        defenderStaminaCapacity,
+                                        defenderMinutes,
+                                        defenderStaminaUsageRatio,
+                                        defenderFatiguePenalty,
+                                        defenderStaminaModifier,
+                                    ) = get_stamina_adjusted_rating(
+                                        defender, "perimeter_defense", defenderMinutes, defenderRecoveryMinutes
                                     )
-                                    movementSuccessProbability = max(0.10,min(0.90,movementSuccessProbability + doubleTeamMovementAdjustment))
-
+                                    baseMovementDefense, movementDefenseType = get_movement_defense(defender, newPos)
+                                    movementDefense, movementDefenseType = get_movement_defense(
+                                        defender, newPos, defenderStaminaModifier
+                                    )
+                                    movementSuccessProbability = max(
+                                        0.10,
+                                        min(
+                                            0.90,
+                                            get_movement_success_probability(movementOffense, movementDefense)
+                                            + doubleTeamMovementAdjustment,
+                                        ),
+                                    )
                                     movementRoll = random.random()
-                                    movementSuccessful = (
-                                            movementRoll < movementSuccessProbability
+                                    movementSuccessful = movementRoll < movementSuccessProbability
+                                    print(
+                                        f"Movement offense: {movementOffense:.4f} [{movementOffenseType}; base {baseMovementOffense:.2f}; stamina adjusted {staminaAdjustedMovementOffense:.4f}; MP {possPlayerMinutes:.2f}; recovery {possPlayerRecoveryMinutes:.2f}; fatigue load {possPlayerFatigueMinutes:.2f}/{offensiveStaminaCapacity:.2f}; stamina modifier {offensiveStaminaModifier:.3f}; momentum {movementMomentumStrength:.0%}; momentum bonus {movementMomentumBonus:.2%}; momentum modifier {movementMomentumModifier:.3f}] | Movement defense: {movementDefense:.4f} [{movementDefenseType}; base {baseMovementDefense:.2f}; MP {defenderMinutes:.2f}; recovery {defenderRecoveryMinutes:.2f}; fatigue load {defenderFatigueMinutes:.2f}/{defenderStaminaCapacity:.2f}; stamina modifier {defenderStaminaModifier:.3f}] | Double-team role: {doubleTeamRole} {doubleTeamMovementAdjustment:+.2%} | Success chance: {movementSuccessProbability:.2%} | Roll: {movementRoll:.4f} | {'SUCCESS' if movementSuccessful else 'CUT OFF'} at {format_court_pos(newPos)}"
                                     )
-
-                                    print(f"Movement offense: {movementOffense:.4f} [{movementOffenseType}; base {baseMovementOffense:.2f}; stamina adjusted {staminaAdjustedMovementOffense:.4f}; MP {possPlayerMinutes:.2f}; recovery {possPlayerRecoveryMinutes:.2f}; fatigue load {possPlayerFatigueMinutes:.2f}/{offensiveStaminaCapacity:.2f}; stamina modifier {offensiveStaminaModifier:.3f}; momentum {movementMomentumStrength:.0%}; momentum bonus {movementMomentumBonus:.2%}; momentum modifier {movementMomentumModifier:.3f}] | Movement defense: {movementDefense:.4f} [{movementDefenseType}; base {baseMovementDefense:.2f}; MP {defenderMinutes:.2f}; recovery {defenderRecoveryMinutes:.2f}; fatigue load {defenderFatigueMinutes:.2f}/{defenderStaminaCapacity:.2f}; stamina modifier {defenderStaminaModifier:.3f}] | Double-team role: {doubleTeamRole} {doubleTeamMovementAdjustment:+.2%} | Success chance: {movementSuccessProbability:.2%} | Roll: {movementRoll:.4f} | {'SUCCESS' if movementSuccessful else 'CUT OFF'} at {format_court_pos(newPos)}")
-
                                     if movementSuccessful:
-                                        courtPos = newPos
-
-                                        crossed_midcourt = update_crossed_midcourt(
-                                            team_side,
-                                            courtPos,
-                                            crossed_midcourt,
+                                        gs.courtPos = newPos
+                                        gs.crossed_midcourt = update_crossed_midcourt(
+                                            team_side, gs.courtPos, gs.crossed_midcourt
                                         )
                                     print(
-                                        (
-                                            str(period) + pInd
-                                            if period <= periodPerGame
-                                            else "OT" + str(period - periodPerGame)
-                                        )
+                                        periodLabel
                                         + ": "
                                         + game_clock_text
                                         + " / Shot Clock: :"
                                         + shot_clock_text
                                         + " ("
-                                        + possTeam
+                                        + gs.possTeam
                                         + ")"
                                     )
-
                                     if movementSuccessful:
                                         print(
-                                            possPlayer["position"] + " "
-                                            + possPlayer["first_name"] + " "
-                                            + possPlayer["last_name"]
+                                            gs.possPlayer["position"]
+                                            + " "
+                                            + gs.possPlayer["first_name"]
+                                            + " "
+                                            + gs.possPlayer["last_name"]
                                             + " moves the ball up the court for "
-                                            + possTeam + "."
+                                            + gs.possTeam
+                                            + "."
                                         )
                                     else:
                                         print(
-                                            possPlayer["position"] + " "
-                                            + possPlayer["first_name"] + " "
-                                            + possPlayer["last_name"]
+                                            gs.possPlayer["position"]
+                                            + " "
+                                            + gs.possPlayer["first_name"]
+                                            + " "
+                                            + gs.possPlayer["last_name"]
                                             + " is cut off and remains at "
-                                            + format_court_pos(courtPos) + "."
+                                            + format_court_pos(gs.courtPos)
+                                            + "."
                                         )
                                     print(footerPos)
-                                    printMomentumMeter()
+                                    gs.printMomentumMeter()
+                                    gs.pbp.append(gs.make_play(move, move_success if movementSuccessful else move_cutoff, elapsed=elapsedTime, defender=defender, next_x=int(gs.courtPos[0]), next_y=int(gs.courtPos[1])))
                                 else:
-                                    assistPlayer = None
-                                    assistMovementCount = 0
+                                    gs.assistPlayer = None
+                                    gs.assistMovementCount = 0
                                     defenderFouledOut = False
                                     defenderFoulProtected = False
                                     defenderStatId = defender["id"].item()
-                                    defenderPlayerId = int(defender["player_id"])
-
+                                    defenderPlayerId = int(defender["ID"])
                                     if offense == t1:
-                                        t2stats.at[defenderStatId,"Foul",] += 1
-                                        if period == 1:
-                                            t2FirstHalfTeamFouls += 1
-                                            defendingHalfTeamFouls = t2FirstHalfTeamFouls
+                                        gs.t2stats.at[defenderStatId, "Foul"] += 1
+                                        if gs.period == 1:
+                                            gs.t2FirstHalfTeamFouls += 1
+                                            defendingHalfTeamFouls = gs.t2FirstHalfTeamFouls
                                         else:
-                                            t2SecondHalfTeamFouls += 1
-                                            defendingHalfTeamFouls = t2SecondHalfTeamFouls
-
-                                        defenderFoulTotal = int(t2stats.at[defenderStatId,"Foul"])
-                                        if defenderFoulTotal >= foulOutLimit and defenderPlayerId not in t2FouledOutPlayerIds:
-                                            t2FouledOutPlayerIds.add(defenderPlayerId)
+                                            gs.t2SecondHalfTeamFouls += 1
+                                            defendingHalfTeamFouls = gs.t2SecondHalfTeamFouls
+                                        defenderFoulTotal = int(gs.t2stats.at[defenderStatId, "Foul"])
+                                        if (
+                                            defenderFoulTotal >= gs.foulOutLimit
+                                            and defenderPlayerId not in gs.t2FouledOutPlayerIds
+                                        ):
+                                            gs.t2FouledOutPlayerIds.add(defenderPlayerId)
                                             defenderFouledOut = True
-                                        defenderFoulProtected = registerFoulProtection(2,defenderStatId,defenderPlayerId,f"{defender['position']} {defender['first_name']} {defender['last_name']}")
+                                        defenderFoulProtected = gs.registerFoulProtection(
+                                            2,
+                                            defenderStatId,
+                                            defenderPlayerId,
+                                            f"{defender['position']} {defender['first_name']} {defender['last_name']}",
+                                        )
                                     else:
-                                        t1stats.at[defenderStatId,"Foul",] += 1
-                                        if period == 1:
-                                            t1FirstHalfTeamFouls += 1
-                                            defendingHalfTeamFouls = t1FirstHalfTeamFouls
+                                        gs.t1stats.at[defenderStatId, "Foul"] += 1
+                                        if gs.period == 1:
+                                            gs.t1FirstHalfTeamFouls += 1
+                                            defendingHalfTeamFouls = gs.t1FirstHalfTeamFouls
                                         else:
-                                            t1SecondHalfTeamFouls += 1
-                                            defendingHalfTeamFouls = t1SecondHalfTeamFouls
-
-                                        defenderFoulTotal = int(t1stats.at[defenderStatId,"Foul"])
-                                        if defenderFoulTotal >= foulOutLimit and defenderPlayerId not in t1FouledOutPlayerIds:
-                                            t1FouledOutPlayerIds.add(defenderPlayerId)
+                                            gs.t1SecondHalfTeamFouls += 1
+                                            defendingHalfTeamFouls = gs.t1SecondHalfTeamFouls
+                                        defenderFoulTotal = int(gs.t1stats.at[defenderStatId, "Foul"])
+                                        if (
+                                            defenderFoulTotal >= gs.foulOutLimit
+                                            and defenderPlayerId not in gs.t1FouledOutPlayerIds
+                                        ):
+                                            gs.t1FouledOutPlayerIds.add(defenderPlayerId)
                                             defenderFouledOut = True
-                                        defenderFoulProtected = registerFoulProtection(1,defenderStatId,defenderPlayerId,f"{defender['position']} {defender['first_name']} {defender['last_name']}")
-
-                                    if league == "CBB" and defendingHalfTeamFouls >= 10:
+                                        defenderFoulProtected = gs.registerFoulProtection(
+                                            1,
+                                            defenderStatId,
+                                            defenderPlayerId,
+                                            f"{defender['position']} {defender['first_name']} {defender['last_name']}",
+                                        )
+                                    if gs.league == "CBB" and defendingHalfTeamFouls >= 10:
                                         bonusType = "double_bonus"
-                                    elif league == "CBB" and defendingHalfTeamFouls >= 7:
+                                    elif gs.league == "CBB" and defendingHalfTeamFouls >= 7:
                                         bonusType = "one_and_one"
                                     else:
                                         bonusType = None
-
-                                    print((str(period) + pInd if period <= periodPerGame else "OT"+str(period-periodPerGame))+ ": "+game_clock_text+ " / Shot Clock: :"+ shot_clock_text+ " ("+ possTeam+ ")")
-                                    print(f"Non-shooting foul by {defender['position']} {defender['first_name']} {defender['last_name']} on {possPlayer['position']} {possPlayer['first_name']} {possPlayer['last_name']}!")
+                                    print(
+                                        periodLabel
+                                        + ": "
+                                        + game_clock_text
+                                        + " / Shot Clock: :"
+                                        + shot_clock_text
+                                        + " ("
+                                        + gs.possTeam
+                                        + ")"
+                                    )
+                                    print(
+                                        f"Non-shooting foul by {defender['position']} {defender['first_name']} {defender['last_name']} on {gs.possPlayer['position']} {gs.possPlayer['first_name']} {gs.possPlayer['last_name']}!"
+                                    )
+                                    gs.pbp.append(gs.make_play(move, move_foul, elapsed=elapsedTime, ball_carrier=gs.possPlayer, defender=defender, fouling_id=int(defender["ID"])))
                                     print(f"Defending team fouls this half: {defendingHalfTeamFouls}")
-
                                     if defenderFouledOut:
-                                        print(f"{defender['position']} {defender['first_name']} {defender['last_name']} has fouled out with {defenderFoulTotal} fouls!")
+                                        print(
+                                            f"{defender['position']} {defender['first_name']} {defender['last_name']} has fouled out with {defenderFoulTotal} fouls!"
+                                        )
                                     freeThrowsAwarded = 0
                                     lastFreeThrowMade = False
-
                                     if bonusType == "one_and_one":
                                         freeThrowsAwarded = 2
-                                        print(f"{possTeam} is in the bonus. {possPlayer['position']} {possPlayer['first_name']} {possPlayer['last_name']} will shoot one-and-one.")
+                                        print(
+                                            f"{gs.possTeam} is in the bonus. {gs.possPlayer['position']} {gs.possPlayer['first_name']} {gs.possPlayer['last_name']} will shoot one-and-one."
+                                        )
                                     elif bonusType == "double_bonus":
                                         freeThrowsAwarded = 2
-                                        print(f"{possTeam} is in the double bonus. {possPlayer['position']} {possPlayer['first_name']} {possPlayer['last_name']} will shoot two free throws.")
-
-                                    protectedFreeThrowPlayer = possPlayer if freeThrowsAwarded > 0 else None
-                                    nonShootingFoulMediaTimeoutTaken = checkTimeoutStoppage(offense,True,protectedFreeThrowPlayer)
-                                    freeThrowSubsCompleted = nonShootingFoulMediaTimeoutTaken
-                                    if (defenderFouledOut or defenderFoulProtected) and freeThrowsAwarded > 0 and not freeThrowSubsCompleted:
-                                        pullFreeThrowSubs(possPlayer)
-                                        freeThrowSubsCompleted = True
-                                        defendedPlayerId = None
-                                        currentDefender = None
-                                        previousDefender = None
-
+                                        print(
+                                            f"{gs.possTeam} is in the double bonus. {gs.possPlayer['position']} {gs.possPlayer['first_name']} {gs.possPlayer['last_name']} will shoot two free throws."
+                                        )
+                                    protectedFTPlayer = gs.possPlayer if freeThrowsAwarded > 0 else None
+                                    nsFoulMediaTimeout = gs.checkTimeoutStoppage(offense, True, protectedFTPlayer)
+                                    ftSubsCompleted = nsFoulMediaTimeout
+                                    if (
+                                        (defenderFouledOut or defenderFoulProtected)
+                                        and freeThrowsAwarded > 0
+                                        and not ftSubsCompleted
+                                    ):
+                                        gs.pullFreeThrowSubs(gs.possPlayer)
+                                        ftSubsCompleted = True
+                                        gs.defendedPlayerId = None
+                                        gs.currentDefender = None
+                                        gs.previousDefender = None
                                     if offense == t1:
-                                        offense_df = t1onCourt
-                                        defense_df = t2onCourt
+                                        offense_df = gs.t1onCourt
+                                        defense_df = gs.t2onCourt
+                                        ftStats = gs.t1stats
                                     else:
-                                        offense_df = t2onCourt
-                                        defense_df = t1onCourt
-
+                                        offense_df = gs.t2onCourt
+                                        defense_df = gs.t1onCourt
+                                        ftStats = gs.t2stats
                                     if freeThrowsAwarded > 0:
-                                        freeThrowHCAAdjustment = HCAAdj if offense == t1 else 0
-                                        if offense == t1:
-                                            freeThrowStats = t1stats
-                                        else:
-                                            freeThrowStats = t2stats
-                                        freeThrowShooterMinutes = float(freeThrowStats.at[possPlayer["id"].item(),"MP"]) / 60
-                                        freeThrowRecoveryMinutes = getPlayerRecoveryMinutes(possPlayer)
-                                        freeThrowFatigueMinutes = max(0.0,freeThrowShooterMinutes - freeThrowRecoveryMinutes)
-                                        (_,_,freeThrowStaminaCapacity,freeThrowShooterMinutes,freeThrowStaminaUsageRatio,freeThrowFatiguePenalty,freeThrowStaminaModifier,) = get_stamina_adjusted_rating(possPlayer,"free_throw",freeThrowShooterMinutes,freeThrowRecoveryMinutes)
-
-                                        for freeThrowNumber in range(1,freeThrowsAwarded + 1):
-                                            (freeThrowMade,freeThrowChance,freeThrowRoll,freeThrowRating,baseFreeThrowRating,) = resolve_free_throw(possPlayer,freeThrowHCAAdjustment,freeThrowStaminaModifier)
-
+                                        ftHCA = gs.HCAAdj if offense == t1 else 0
+                                        ftShooterMinutes = float(ftStats.at[gs.possPlayer["id"].item(), "MP"]) / 60
+                                        ftRecoveryMinutes = gs.getPlayerRecoveryMinutes(gs.possPlayer)
+                                        ftFatigueMinutes = max(0.0, ftShooterMinutes - ftRecoveryMinutes)
+                                        (
+                                            _,
+                                            _,
+                                            ftStaminaCapacity,
+                                            ftShooterMinutes,
+                                            ftStaminaUsageRatio,
+                                            ftFatiguePenalty,
+                                            ftStaminaModifier,
+                                        ) = get_stamina_adjusted_rating(
+                                            gs.possPlayer, "free_throw", ftShooterMinutes, ftRecoveryMinutes
+                                        )
+                                        for ftNum in range(1, freeThrowsAwarded + 1):
+                                            ftMade, ftChance, ftRoll, ftRating, baseFTRating = resolve_free_throw(
+                                                gs.possPlayer, ftHCA, ftStaminaModifier
+                                            )
                                             if offense == t1:
-                                                t1stats.at[possPlayer["id"].item(),"FT Shot Att",] += 1
+                                                gs.t1stats.at[gs.possPlayer["id"].item(), "FT Shot Att"] += 1
                                             else:
-                                                t2stats.at[possPlayer["id"].item(),"FT Shot Att",] += 1
-
-                                            if freeThrowMade:
+                                                gs.t2stats.at[gs.possPlayer["id"].item(), "FT Shot Att"] += 1
+                                            if ftMade:
                                                 if offense == t1:
-                                                    t1pts += 1
-                                                    t1stats.at[possPlayer["id"].item(),"FT Shot Made",] += 1
-                                                    if period == 1:
-                                                        t1q1pts += 1
-                                                    elif period == 2:
-                                                        t1q2pts += 1
-                                                    elif league != "CBB" and period == 3:
-                                                        t1q3pts += 1
-                                                    elif league != "CBB" and period == 4:
-                                                        t1q4pts += 1
-                                                    elif period > periodPerGame:
-                                                        t1qotpts += 1
+                                                    gs.t1pts += 1
+                                                    gs.t1stats.at[gs.possPlayer["id"].item(), "FT Shot Made"] += 1
+                                                    if gs.period == 1:
+                                                        gs.t1q1pts += 1
+                                                    elif gs.period == 2:
+                                                        gs.t1q2pts += 1
+                                                    elif gs.league != "CBB" and gs.period == 3:
+                                                        gs.t1q3pts += 1
+                                                    elif gs.league != "CBB" and gs.period == 4:
+                                                        gs.t1q4pts += 1
+                                                    elif gs.period > gs.periodPerGame:
+                                                        gs.t1qotpts += 1
                                                 else:
-                                                    t2pts += 1
-                                                    t2stats.at[possPlayer["id"].item(),"FT Shot Made",] += 1
-                                                    if period == 1:
-                                                        t2q1pts += 1
-                                                    elif period == 2:
-                                                        t2q2pts += 1
-                                                    elif league != "CBB" and period == 3:
-                                                        t2q3pts += 1
-                                                    elif league != "CBB" and period == 4:
-                                                        t2q4pts += 1
-                                                    elif period > periodPerGame:
-                                                        t2qotpts += 1
-
-                                            print(f"Free throw {freeThrowNumber} of {freeThrowsAwarded}: rating {freeThrowRating:.4f} [base {baseFreeThrowRating:.2f}; MP {freeThrowShooterMinutes:.2f}; recovery {freeThrowRecoveryMinutes:.2f}; fatigue load {freeThrowFatigueMinutes:.2f}/{freeThrowStaminaCapacity:.2f}; modifier {freeThrowStaminaModifier:.3f}] | Chance: {freeThrowChance:.2%} | Roll: {freeThrowRoll:.4f} | {'GOOD' if freeThrowMade else 'MISSED'}")
-                                            lastFreeThrowMade = freeThrowMade
-
-                                            if bonusType == "one_and_one" and freeThrowNumber == 1 and not freeThrowMade:
+                                                    gs.t2pts += 1
+                                                    gs.t2stats.at[gs.possPlayer["id"].item(), "FT Shot Made"] += 1
+                                                    if gs.period == 1:
+                                                        gs.t2q1pts += 1
+                                                    elif gs.period == 2:
+                                                        gs.t2q2pts += 1
+                                                    elif gs.league != "CBB" and gs.period == 3:
+                                                        gs.t2q3pts += 1
+                                                    elif gs.league != "CBB" and gs.period == 4:
+                                                        gs.t2q4pts += 1
+                                                    elif gs.period > gs.periodPerGame:
+                                                        gs.t2qotpts += 1
+                                            print(
+                                                f"Free throw {ftNum} of {freeThrowsAwarded}: rating {ftRating:.4f} [base {baseFTRating:.2f}; MP {ftShooterMinutes:.2f}; recovery {ftRecoveryMinutes:.2f}; fatigue load {ftFatigueMinutes:.2f}/{ftStaminaCapacity:.2f}; modifier {ftStaminaModifier:.3f}] | Chance: {ftChance:.2%} | Roll: {ftRoll:.4f} | {'GOOD' if ftMade else 'MISSED'}"
+                                            )
+                                            lastFreeThrowMade = ftMade
+                                            gs.pbp.append(gs.make_play(free_throw, ft_made if ftMade else ft_missed, ball_carrier=gs.possPlayer, fouling_id=int(defender["ID"])))
+                                            if ftMade:
+                                                gs.updateLargestLeads()
+                                            if bonusType == "one_and_one" and ftNum == 1 and not ftMade:
                                                 print("The front end of the one-and-one is missed. The ball is live!")
                                                 break
-                                            if freeThrowNumber == 1 and freeThrowsAwarded > 1 and not freeThrowSubsCompleted:
-                                                pullFreeThrowSubs(possPlayer)
-                                                freeThrowSubsCompleted = True
+                                            if ftNum == 1 and freeThrowsAwarded > 1 and not ftSubsCompleted:
+                                                gs.pullFreeThrowSubs(gs.possPlayer)
+                                                ftSubsCompleted = True
                                                 if offense == t1:
-                                                    offense_df = t1onCourt
-                                                    defense_df = t2onCourt
+                                                    offense_df = gs.t1onCourt
+                                                    defense_df = gs.t2onCourt
                                                 else:
-                                                    offense_df = t2onCourt
-                                                    defense_df = t1onCourt
-                                    if (defenderFouledOut or defenderFoulProtected) and freeThrowsAwarded == 0 and not nonShootingFoulMediaTimeoutTaken:
-                                        t1onCourt,t2onCourt,lineupParameters = pullSubs(False)
-
+                                                    offense_df = gs.t2onCourt
+                                                    defense_df = gs.t1onCourt
+                                    if (
+                                        (defenderFouledOut or defenderFoulProtected)
+                                        and freeThrowsAwarded == 0
+                                        and not nsFoulMediaTimeout
+                                    ):
+                                        gs.applySubs(False)
                                         if offense == t1:
-                                            offense_df = t1onCourt
-                                            defense_df = t2onCourt
+                                            offense_df = gs.t1onCourt
+                                            defense_df = gs.t2onCourt
                                         else:
-                                            offense_df = t2onCourt
-                                            defense_df = t1onCourt
-
-                                        defendedPlayerId = None
-                                        currentDefender = None
-                                        previousDefender = None
-                                        substitutionReason = "foul-out" if defenderFouledOut else "foul protection"
-
-                                        print(t1 + " Subs after " + substitutionReason + ":")
-                                        for lineupPlayer in t1onCourt.values():
-                                            print(lineupPlayer["position"] + " " + lineupPlayer["first_name"] + " " + lineupPlayer["last_name"])
-
-                                        print(t2 + " Subs after " + substitutionReason + ":")
-                                        for lineupPlayer in t2onCourt.values():
-                                            print(lineupPlayer["position"] + " " + lineupPlayer["first_name"] + " " + lineupPlayer["last_name"])
-
+                                            offense_df = gs.t2onCourt
+                                            defense_df = gs.t1onCourt
+                                        gs.defendedPlayerId = None
+                                        gs.currentDefender = None
+                                        gs.previousDefender = None
+                                        subReason = "foul-out" if defenderFouledOut else "foul protection"
+                                        print(t1 + " Subs after " + subReason + ":")
+                                        for p in gs.t1onCourt.values():
+                                            print(p["position"] + " " + p["first_name"] + " " + p["last_name"])
+                                        print(t2 + " Subs after " + subReason + ":")
+                                        for p in gs.t2onCourt.values():
+                                            print(p["position"] + " " + p["first_name"] + " " + p["last_name"])
                                     if bonusType is None:
-                                        possPlayer = random.choice(list(offense_df.values()))
-                                        currShotClock = max(currShotClock,shotClockReset)
-                                        if currTime < currShotClock:
-                                            currShotClock = currTime
-                                        defendedPlayerId = None
-                                        currentDefender = None
-                                        previousDefender = None
-                                        print(possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " takes the ball out for " + possTeam + ".")
-                                        finalHeavePending = True
-
+                                        gs.possPlayer = random.choice(list(offense_df.values()))
+                                        gs.currShotClock = max(gs.currShotClock, gs.shotClockReset)
+                                        if gs.currTime < gs.currShotClock:
+                                            gs.currShotClock = gs.currTime
+                                        gs.defendedPlayerId = None
+                                        gs.currentDefender = None
+                                        gs.previousDefender = None
+                                        print(
+                                            gs.possPlayer["position"]
+                                            + " "
+                                            + gs.possPlayer["first_name"]
+                                            + " "
+                                            + gs.possPlayer["last_name"]
+                                            + " takes the ball out for "
+                                            + gs.possTeam
+                                            + "."
+                                        )
+                                        gs.pbp.append(gs.make_play(inbound, inbound_success, ball_carrier=gs.possPlayer))
+                                        gs.finalHeavePending = True
                                     elif not lastFreeThrowMade:
                                         rebRand = random.random()
-                                        if offense == t1:
-                                            offensiveReboundChance = lineupParameters["t1OffensiveRebound"]
-                                        else:
-                                            offensiveReboundChance = lineupParameters["t2OffensiveRebound"]
-
+                                        offensiveReboundChance = gs.lineupParameters[
+                                            "t1OffensiveRebound" if offense == t1 else "t2OffensiveRebound"
+                                        ]
                                         if rebRand < offensiveReboundChance:
-                                            possPlayer = random.choice(list(offense_df.values()))
+                                            gs.possPlayer = random.choice(list(offense_df.values()))
                                             if offense == t1:
-                                                t1stats.at[possPlayer["id"].item(),"OREB",] += 1
+                                                gs.t1stats.at[gs.possPlayer["id"].item(), "OREB"] += 1
                                             else:
-                                                t2stats.at[possPlayer["id"].item(),"OREB",] += 1
-                                            print(possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " grabs the offensive rebound for " + possTeam)
-                                            currShotClock = shotClockReset
-                                            if currTime < currShotClock:
-                                                currShotClock = currTime
+                                                gs.t2stats.at[gs.possPlayer["id"].item(), "OREB"] += 1
+                                            print(
+                                                gs.possPlayer["position"]
+                                                + " "
+                                                + gs.possPlayer["first_name"]
+                                                + " "
+                                                + gs.possPlayer["last_name"]
+                                                + " grabs the offensive rebound for "
+                                                + gs.possTeam
+                                            )
+                                            gs.pbp.append(gs.make_play(rebound, offensive_rebound, ball_carrier=gs.possPlayer))
+                                            gs.currShotClock = gs.shotClockReset
+                                            if gs.currTime < gs.currShotClock:
+                                                gs.currShotClock = gs.currTime
                                         else:
-                                            possPlayer = random.choice(list(defense_df.values()))
+                                            gs.possPlayer = random.choice(list(defense_df.values()))
                                             if offense == t1:
-                                                t2stats.at[possPlayer["id"].item(),"DREB",] += 1
-                                                possTeam = t2
+                                                gs.t2stats.at[gs.possPlayer["id"].item(), "DREB"] += 1
+                                                gs.possTeam = t2
                                                 offense = t2
                                                 defense = t1
-                                                offense_df = t2onCourt
-                                                defense_df = t1onCourt
-                                                courtPos = (random.randint(2,4),random.randint(2,4))
+                                                offense_df = gs.t2onCourt
+                                                defense_df = gs.t1onCourt
+                                                gs.courtPos = (random.randint(2, 4), random.randint(2, 4))
                                             else:
-                                                t1stats.at[possPlayer["id"].item(),"DREB",] += 1
-                                                possTeam = t1
+                                                gs.t1stats.at[gs.possPlayer["id"].item(), "DREB"] += 1
+                                                gs.possTeam = t1
                                                 offense = t1
                                                 defense = t2
-                                                offense_df = t1onCourt
-                                                defense_df = t2onCourt
-                                                courtPos = (random.randint(2,4) * -1,random.randint(2,4))
-
-                                            currShotClock = shotClock
-                                            if currTime <= shotClock:
-                                                currShotClock = currTime
-                                            crossed_midcourt = False
-                                            print(possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " grabs the defensive rebound for " + possTeam)
-                                            defendedPlayerId = None
-                                            currentDefender = None
-                                            previousDefender = None
-
+                                                offense_df = gs.t1onCourt
+                                                defense_df = gs.t2onCourt
+                                                gs.courtPos = (random.randint(2, 4) * -1, random.randint(2, 4))
+                                            gs.currShotClock = gs.shotClock
+                                            if gs.currTime <= gs.shotClock:
+                                                gs.currShotClock = gs.currTime
+                                            gs.crossed_midcourt = False
+                                            print(
+                                                gs.possPlayer["position"]
+                                                + " "
+                                                + gs.possPlayer["first_name"]
+                                                + " "
+                                                + gs.possPlayer["last_name"]
+                                                + " grabs the defensive rebound for "
+                                                + gs.possTeam
+                                            )
+                                            gs.pbp.append(gs.make_play(rebound, defensive_rebound, ball_carrier=gs.possPlayer))
+                                            gs.defendedPlayerId = None
+                                            gs.currentDefender = None
+                                            gs.previousDefender = None
                                     else:
                                         if offense == t1:
-                                            possTeam = t2
-                                            offense = t2
-                                            defense = t1
-                                            offense_df = t2onCourt
-                                            defense_df = t1onCourt
-                                            courtPos = (4,3)
-                                            possPlayer = random.choice(list(t2onCourt.values()))
+                                            gs.possTeam = t2
+                                            offense_df = gs.t2onCourt
+                                            defense_df = gs.t1onCourt
+                                            gs.courtPos = (4, 3)
+                                            gs.possPlayer = random.choice(list(gs.t2onCourt.values()))
                                         else:
-                                            possTeam = t1
-                                            offense = t1
-                                            defense = t2
-                                            offense_df = t1onCourt
-                                            defense_df = t2onCourt
-                                            courtPos = (-4,3)
-                                            possPlayer = random.choice(list(t1onCourt.values()))
-
-                                        crossed_midcourt = False
-                                        currShotClock = shotClock
-                                        if currTime <= shotClock:
-                                            currShotClock = currTime
-                                        defendedPlayerId = None
-                                        currentDefender = None
-                                        previousDefender = None
-                                        print(possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " takes the ball out for " + possTeam)
-                                        finalHeavePending = True
-
+                                            gs.possTeam = t1
+                                            offense_df = gs.t1onCourt
+                                            defense_df = gs.t2onCourt
+                                            gs.courtPos = (-4, 3)
+                                            gs.possPlayer = random.choice(list(gs.t1onCourt.values()))
+                                        gs.crossed_midcourt = False
+                                        gs.currShotClock = gs.shotClock
+                                        if gs.currTime <= gs.shotClock:
+                                            gs.currShotClock = gs.currTime
+                                        gs.defendedPlayerId = None
+                                        gs.currentDefender = None
+                                        gs.previousDefender = None
+                                        print(
+                                            gs.possPlayer["position"]
+                                            + " "
+                                            + gs.possPlayer["first_name"]
+                                            + " "
+                                            + gs.possPlayer["last_name"]
+                                            + " takes the ball out for "
+                                            + gs.possTeam
+                                        )
+                                        gs.pbp.append(gs.make_play(inbound, inbound_success, ball_carrier=gs.possPlayer))
+                                        gs.finalHeavePending = True
                                     print(footerPos)
-                                    printMomentumMeter()
+                                    gs.printMomentumMeter()
                             else:
-                                assistPlayer = None
-                                assistMovementCount = 0
+                                gs.assistPlayer = None
+                                gs.assistMovementCount = 0
                                 offensivePlayerFouledOut = False
                                 offensivePlayerFoulProtected = False
-                                offensivePlayerStatId = possPlayer["id"].item()
-                                offensivePlayerId = int(possPlayer["player_id"])
-
+                                offensivePlayerStatId = gs.possPlayer["id"].item()
+                                offensivePlayerId = int(gs.possPlayer["ID"])
                                 if offense == t1:
-                                    t1stats.at[offensivePlayerStatId,"Foul",] += 1
-                                    t1stats.at[offensivePlayerStatId,"TO",] += 1
-                                    if period == 1:
-                                        t1FirstHalfTeamFouls += 1
-                                        offensiveHalfTeamFouls = t1FirstHalfTeamFouls
+                                    gs.t1stats.at[offensivePlayerStatId, "Foul"] += 1
+                                    gs.t1stats.at[offensivePlayerStatId, "TO"] += 1
+                                    if gs.period == 1:
+                                        gs.t1FirstHalfTeamFouls += 1
+                                        offensiveHalfTeamFouls = gs.t1FirstHalfTeamFouls
                                     else:
-                                        t1SecondHalfTeamFouls += 1
-                                        offensiveHalfTeamFouls = t1SecondHalfTeamFouls
-
-                                    offensivePlayerFoulTotal = int(t1stats.at[offensivePlayerStatId,"Foul"])
-                                    if offensivePlayerFoulTotal >= foulOutLimit and offensivePlayerId not in t1FouledOutPlayerIds:
-                                        t1FouledOutPlayerIds.add(offensivePlayerId)
+                                        gs.t1SecondHalfTeamFouls += 1
+                                        offensiveHalfTeamFouls = gs.t1SecondHalfTeamFouls
+                                    offensivePlayerFoulTotal = int(gs.t1stats.at[offensivePlayerStatId, "Foul"])
+                                    if (
+                                        offensivePlayerFoulTotal >= gs.foulOutLimit
+                                        and offensivePlayerId not in gs.t1FouledOutPlayerIds
+                                    ):
+                                        gs.t1FouledOutPlayerIds.add(offensivePlayerId)
                                         offensivePlayerFouledOut = True
-                                    offensivePlayerFoulProtected = registerFoulProtection(1,offensivePlayerStatId,offensivePlayerId,f"{possPlayer['position']} {possPlayer['first_name']} {possPlayer['last_name']}")
+                                    offensivePlayerFoulProtected = gs.registerFoulProtection(
+                                        1,
+                                        offensivePlayerStatId,
+                                        offensivePlayerId,
+                                        f"{gs.possPlayer['position']} {gs.possPlayer['first_name']} {gs.possPlayer['last_name']}",
+                                    )
                                 else:
-                                    t2stats.at[offensivePlayerStatId,"Foul",] += 1
-                                    t2stats.at[offensivePlayerStatId,"TO",] += 1
-                                    if period == 1:
-                                        t2FirstHalfTeamFouls += 1
-                                        offensiveHalfTeamFouls = t2FirstHalfTeamFouls
+                                    gs.t2stats.at[offensivePlayerStatId, "Foul"] += 1
+                                    gs.t2stats.at[offensivePlayerStatId, "TO"] += 1
+                                    if gs.period == 1:
+                                        gs.t2FirstHalfTeamFouls += 1
+                                        offensiveHalfTeamFouls = gs.t2FirstHalfTeamFouls
                                     else:
-                                        t2SecondHalfTeamFouls += 1
-                                        offensiveHalfTeamFouls = t2SecondHalfTeamFouls
-
-                                    offensivePlayerFoulTotal = int(t2stats.at[offensivePlayerStatId,"Foul"])
-                                    if offensivePlayerFoulTotal >= foulOutLimit and offensivePlayerId not in t2FouledOutPlayerIds:
-                                        t2FouledOutPlayerIds.add(offensivePlayerId)
+                                        gs.t2SecondHalfTeamFouls += 1
+                                        offensiveHalfTeamFouls = gs.t2SecondHalfTeamFouls
+                                    offensivePlayerFoulTotal = int(gs.t2stats.at[offensivePlayerStatId, "Foul"])
+                                    if (
+                                        offensivePlayerFoulTotal >= gs.foulOutLimit
+                                        and offensivePlayerId not in gs.t2FouledOutPlayerIds
+                                    ):
+                                        gs.t2FouledOutPlayerIds.add(offensivePlayerId)
                                         offensivePlayerFouledOut = True
-                                    offensivePlayerFoulProtected = registerFoulProtection(2,offensivePlayerStatId,offensivePlayerId,f"{possPlayer['position']} {possPlayer['first_name']} {possPlayer['last_name']}")
-
-                                print((str(period) + pInd if period <= periodPerGame else "OT"+str(period-periodPerGame))+ ": "+game_clock_text+ " / Shot Clock: :"+ shot_clock_text+ " ("+ possTeam+ ")")
-                                print(f"OFFENSIVE FOUL! {possPlayer['position']} {possPlayer['first_name']} {possPlayer['last_name']} is called for a charge drawn by {defender['position']} {defender['first_name']} {defender['last_name']}!")
+                                    offensivePlayerFoulProtected = gs.registerFoulProtection(
+                                        2,
+                                        offensivePlayerStatId,
+                                        offensivePlayerId,
+                                        f"{gs.possPlayer['position']} {gs.possPlayer['first_name']} {gs.possPlayer['last_name']}",
+                                    )
+                                print(
+                                    periodLabel
+                                    + ": "
+                                    + game_clock_text
+                                    + " / Shot Clock: :"
+                                    + shot_clock_text
+                                    + " ("
+                                    + gs.possTeam
+                                    + ")"
+                                )
+                                print(
+                                    f"OFFENSIVE FOUL! {gs.possPlayer['position']} {gs.possPlayer['first_name']} {gs.possPlayer['last_name']} is called for a charge drawn by {defender['position']} {defender['first_name']} {defender['last_name']}!"
+                                )
+                                gs.pbp.append(gs.make_play(move, offensive_charge, elapsed=elapsedTime, ball_carrier=gs.possPlayer, defender=defender, fouling_id=int(gs.possPlayer["ID"])))
                                 print(f"Offensive team fouls this half: {offensiveHalfTeamFouls}")
-
                                 if offensivePlayerFouledOut:
-                                    print(f"{possPlayer['position']} {possPlayer['first_name']} {possPlayer['last_name']} has fouled out with {offensivePlayerFoulTotal} fouls!")
-
-                                offensiveFoulMediaTimeoutTaken = checkTimeoutStoppage(defense,True)
-
-                                if (offensivePlayerFouledOut or offensivePlayerFoulProtected) and not offensiveFoulMediaTimeoutTaken:
-                                    t1onCourt,t2onCourt,lineupParameters = pullSubs(False)
-                                    substitutionReason = "foul-out" if offensivePlayerFouledOut else "foul protection"
-                                    print(t1 + " Subs after " + substitutionReason + ":")
-                                    for lineupPlayer in t1onCourt.values():
-                                        print(lineupPlayer["position"] + " " + lineupPlayer["first_name"] + " " + lineupPlayer["last_name"])
-                                    print(t2 + " Subs after " + substitutionReason + ":")
-                                    for lineupPlayer in t2onCourt.values():
-                                        print(lineupPlayer["position"] + " " + lineupPlayer["first_name"] + " " + lineupPlayer["last_name"])
-
+                                    print(
+                                        f"{gs.possPlayer['position']} {gs.possPlayer['first_name']} {gs.possPlayer['last_name']} has fouled out with {offensivePlayerFoulTotal} fouls!"
+                                    )
+                                offFoulMediaTimeout = gs.checkTimeoutStoppage(defense, True)
+                                if (
+                                    offensivePlayerFouledOut or offensivePlayerFoulProtected
+                                ) and not offFoulMediaTimeout:
+                                    gs.applySubs(False)
+                                    subReason = "foul-out" if offensivePlayerFouledOut else "foul protection"
+                                    print(t1 + " Subs after " + subReason + ":")
+                                    for p in gs.t1onCourt.values():
+                                        print(p["position"] + " " + p["first_name"] + " " + p["last_name"])
+                                    print(t2 + " Subs after " + subReason + ":")
+                                    for p in gs.t2onCourt.values():
+                                        print(p["position"] + " " + p["first_name"] + " " + p["last_name"])
                                 if offense == t1:
-                                    possTeam = t2
-                                    offense = t2
-                                    defense = t1
-                                    offense_df = t2onCourt
-                                    defense_df = t1onCourt
-                                    courtPos = (4,3)
-                                    possPlayer = random.choice(list(t2onCourt.values()))
+                                    gs.possTeam = t2
+                                    offense_df = gs.t2onCourt
+                                    defense_df = gs.t1onCourt
+                                    gs.courtPos = (4, 3)
+                                    gs.possPlayer = random.choice(list(gs.t2onCourt.values()))
                                 else:
-                                    possTeam = t1
-                                    offense = t1
-                                    defense = t2
-                                    offense_df = t1onCourt
-                                    defense_df = t2onCourt
-                                    courtPos = (-4,3)
-                                    possPlayer = random.choice(list(t1onCourt.values()))
-
-                                crossed_midcourt = False
-                                currShotClock = shotClock
-                                if currTime <= shotClock:
-                                    currShotClock = currTime
-                                assistPlayer = None
-                                defendedPlayerId = None
-                                currentDefender = None
-                                previousDefender = None
-                                print(possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " takes the ball out for " + possTeam + ".")
-                                finalHeavePending = True
+                                    gs.possTeam = t1
+                                    offense_df = gs.t1onCourt
+                                    defense_df = gs.t2onCourt
+                                    gs.courtPos = (-4, 3)
+                                    gs.possPlayer = random.choice(list(gs.t1onCourt.values()))
+                                gs.crossed_midcourt = False
+                                gs.currShotClock = gs.shotClock
+                                if gs.currTime <= gs.shotClock:
+                                    gs.currShotClock = gs.currTime
+                                gs.assistPlayer = None
+                                gs.defendedPlayerId = None
+                                gs.currentDefender = None
+                                gs.previousDefender = None
+                                print(
+                                    gs.possPlayer["position"]
+                                    + " "
+                                    + gs.possPlayer["first_name"]
+                                    + " "
+                                    + gs.possPlayer["last_name"]
+                                    + " takes the ball out for "
+                                    + gs.possTeam
+                                    + "."
+                                )
+                                gs.pbp.append(gs.make_play(inbound, inbound_success, ball_carrier=gs.possPlayer))
+                                gs.finalHeavePending = True
                                 print(footerPos)
-                                printMomentumMeter()
+                                gs.printMomentumMeter()
                         else:
-                            print((str(period) + pInd if period <= periodPerGame else "OT"+str(period-periodPerGame))+ ": "+game_clock_text+ " / Shot Clock: :"+ shot_clock_text+ " ("+ possTeam+ ")")
-                            print(possPlayer["position"] + " " + possPlayer ["first_name"] + " " + possPlayer["last_name"] + " is trapped and cannot move.")
+                            print(
+                                periodLabel
+                                + ": "
+                                + game_clock_text
+                                + " / Shot Clock: :"
+                                + shot_clock_text
+                                + " ("
+                                + gs.possTeam
+                                + ")"
+                            )
+                            print(
+                                gs.possPlayer["position"]
+                                + " "
+                                + gs.possPlayer["first_name"]
+                                + " "
+                                + gs.possPlayer["last_name"]
+                                + " is trapped and cannot move."
+                            )
                             print(footerPos)
-                            printMomentumMeter()
-
+                            gs.printMomentumMeter()
+                            gs.pbp.append(gs.make_play(move, move_trapped, elapsed=elapsedTime))
 
                     elif action == "pass":
-                        formationDestinationWeights = t1FormationDestinationWeights if offense == t1 else t2FormationDestinationWeights
-                        activeDestinationWeights,activeLineupPreferences = getActiveDestinationWeights(offense_df,formationDestinationWeights)
-                        targetPos = choose_weighted_pass_target(
-                            team_side,
-                            courtPos,
-                            crossed_midcourt,
-                            activeDestinationWeights,
+                        passingPlayer = gs.possPlayer
+                        passingTeamId = int((gs.t1team_df if offense == t1 else gs.t2team_df)["id"].iloc[0])
+                        formationWeights = (
+                            gs.t1FormationDestinationWeights if offense == t1 else gs.t2FormationDestinationWeights
                         )
-
+                        activeDestinationWeights, activeLineupPreferences = gs.getActiveDestinationWeights(
+                            offense_df, formationWeights
+                        )
+                        targetPos = choose_weighted_pass_target(
+                            team_side, gs.courtPos, gs.crossed_midcourt, activeDestinationWeights
+                        )
                         if targetPos is not None:
-                            offenseStats = t1stats if offense == t1 else t2stats
-                            defenseStats = t2stats if offense == t1 else t1stats
-
-                            possPlayerMinutes = float(offenseStats.at[possPlayer["id"].item(),"MP"]) / 60
-                            defenderMinutes = float(defenseStats.at[defender["id"].item(),"MP"]) / 60
-                            possPlayerRecoveryMinutes = getPlayerRecoveryMinutes(possPlayer)
-                            defenderRecoveryMinutes = getPlayerRecoveryMinutes(defender)
-                            possPlayerFatigueMinutes = max(0.0,possPlayerMinutes - possPlayerRecoveryMinutes)
-                            defenderFatigueMinutes = max(0.0,defenderMinutes - defenderRecoveryMinutes)
-
-                            (passOffense,basePassOffense,offensiveStaminaCapacity,possPlayerMinutes,offensiveStaminaUsageRatio,offensiveFatiguePenalty,offensiveStaminaModifier,) = get_stamina_adjusted_rating(possPlayer,"ballwork",possPlayerMinutes,possPlayerRecoveryMinutes)
+                            offenseStats = gs.t1stats if offense == t1 else gs.t2stats
+                            defenseStats = gs.t2stats if offense == t1 else gs.t1stats
+                            possPlayerMinutes = float(offenseStats.at[gs.possPlayer["id"].item(), "MP"]) / 60
+                            defenderMinutes = float(defenseStats.at[defender["id"].item(), "MP"]) / 60
+                            possPlayerRecoveryMinutes = gs.getPlayerRecoveryMinutes(gs.possPlayer)
+                            defenderRecoveryMinutes = gs.getPlayerRecoveryMinutes(defender)
+                            possPlayerFatigueMinutes = max(0.0, possPlayerMinutes - possPlayerRecoveryMinutes)
+                            defenderFatigueMinutes = max(0.0, defenderMinutes - defenderRecoveryMinutes)
+                            (
+                                passOffense,
+                                basePassOffense,
+                                offensiveStaminaCapacity,
+                                possPlayerMinutes,
+                                offensiveStaminaUsageRatio,
+                                offensiveFatiguePenalty,
+                                offensiveStaminaModifier,
+                            ) = get_stamina_adjusted_rating(
+                                gs.possPlayer, "ballwork", possPlayerMinutes, possPlayerRecoveryMinutes
+                            )
                             passOffenseType = "ballwork"
                             staminaAdjustedPassOffense = passOffense
-                            (passOffense,passMomentumStrength,passMomentumBonus,passMomentumModifier,) = getMomentumAdjustedRating(staminaAdjustedPassOffense,offense)
-                            (_,_,defenderStaminaCapacity,defenderMinutes,defenderStaminaUsageRatio,defenderFatiguePenalty,defenderStaminaModifier,) = get_stamina_adjusted_rating(defender,"perimeter_defense",defenderMinutes,defenderRecoveryMinutes)
-
-                            basePassDefense,passDefenseType = get_movement_defense(defender,courtPos)
-                            passDefense,passDefenseType = get_movement_defense(defender,courtPos,defenderStaminaModifier)
-
-                            distanceDeflectionChance = (
-                                get_pass_turnover_chance(
-                                    courtPos,
-                                    targetPos,
-                                )
+                            passOffense, passMomentumStrength, passMomentumBonus, passMomentumModifier = (
+                                gs.getMomentumAdjustedRating(staminaAdjustedPassOffense, offense)
                             )
-                            passDeflectionChance = (
-                                get_pass_deflection_chance(
-                                    courtPos,
-                                    targetPos,
-                                    passOffense,
-                                    passDefense,
-                                )
+                            (
+                                _,
+                                _,
+                                defenderStaminaCapacity,
+                                defenderMinutes,
+                                defenderStaminaUsageRatio,
+                                defenderFatiguePenalty,
+                                defenderStaminaModifier,
+                            ) = get_stamina_adjusted_rating(
+                                defender, "perimeter_defense", defenderMinutes, defenderRecoveryMinutes
                             )
-                            passDeflectionChance = max(passDeflectionMinimum,min(passDeflectionMaximum,passDeflectionChance + doubleTeamPassDeflectionAdjustment))
+                            basePassDefense, passDefenseType = get_movement_defense(defender, gs.courtPos)
+                            passDefense, passDefenseType = get_movement_defense(
+                                defender, gs.courtPos, defenderStaminaModifier
+                            )
+                            distanceDeflectionChance = get_pass_turnover_chance(gs.courtPos, targetPos)
+                            passDeflectionChance = max(
+                                passDeflectionMinimum,
+                                min(
+                                    passDeflectionMaximum,
+                                    get_pass_deflection_chance(gs.courtPos, targetPos, passOffense, passDefense)
+                                    + doubleTeamPassDeflectionAdjustment,
+                                ),
+                            )
                             passRoll = random.random()
-                            passDeflected = (
-                                    passRoll < passDeflectionChance
+                            passDeflected = passRoll < passDeflectionChance
+                            print(
+                                f"Pass offense: {passOffense:.4f} [{passOffenseType}; base {basePassOffense:.2f}; stamina adjusted {staminaAdjustedPassOffense:.4f}; MP {possPlayerMinutes:.2f}; recovery {possPlayerRecoveryMinutes:.2f}; fatigue load {possPlayerFatigueMinutes:.2f}/{offensiveStaminaCapacity:.2f}; stamina modifier {offensiveStaminaModifier:.3f}; momentum {passMomentumStrength:.0%}; momentum bonus {passMomentumBonus:.2%}; momentum modifier {passMomentumModifier:.3f}] | Pass defense: {passDefense:.4f} [{passDefenseType}; base {basePassDefense:.2f}; MP {defenderMinutes:.2f}; recovery {defenderRecoveryMinutes:.2f}; fatigue load {defenderFatigueMinutes:.2f}/{defenderStaminaCapacity:.2f}; stamina modifier {defenderStaminaModifier:.3f}] | Distance chance: {distanceDeflectionChance:.2%} | Double-team role: {doubleTeamRole} {doubleTeamPassDeflectionAdjustment:+.2%} | Final deflection chance: {passDeflectionChance:.2%} | Roll: {passRoll:.4f} | {'DEFLECTED' if passDeflected else 'CLEAN'} toward {format_court_pos(targetPos)}"
                             )
-
-                            print(f"Pass offense: {passOffense:.4f} [{passOffenseType}; base {basePassOffense:.2f}; stamina adjusted {staminaAdjustedPassOffense:.4f}; MP {possPlayerMinutes:.2f}; recovery {possPlayerRecoveryMinutes:.2f}; fatigue load {possPlayerFatigueMinutes:.2f}/{offensiveStaminaCapacity:.2f}; stamina modifier {offensiveStaminaModifier:.3f}; momentum {passMomentumStrength:.0%}; momentum bonus {passMomentumBonus:.2%}; momentum modifier {passMomentumModifier:.3f}] | Pass defense: {passDefense:.4f} [{passDefenseType}; base {basePassDefense:.2f}; MP {defenderMinutes:.2f}; recovery {defenderRecoveryMinutes:.2f}; fatigue load {defenderFatigueMinutes:.2f}/{defenderStaminaCapacity:.2f}; stamina modifier {defenderStaminaModifier:.3f}] | Distance chance: {distanceDeflectionChance:.2%} | Double-team role: {doubleTeamRole} {doubleTeamPassDeflectionAdjustment:+.2%} | Final deflection chance: {passDeflectionChance:.2%} | Roll: {passRoll:.4f} | {'DEFLECTED' if passDeflected else 'CLEAN'} toward {format_court_pos(targetPos)}")
-
                             if passDeflected:
                                 looseRand = random.random()
-                                if possTeam == t1:
-                                    looseBallCO = lineupParameters["t1LooseBall"]
-                                else:
-                                    looseBallCO = lineupParameters["t2LooseBall"]
+                                looseBallCO = gs.lineupParameters["t1LooseBall" if gs.possTeam == t1 else "t2LooseBall"]
                                 if looseRand < looseBallCO:
                                     pickupPlayer = random.choice(list(offense_df.values()))
-                                    print("Pass from " + possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " toward " + format_court_pos(targetPos) + " is deflected! His teammate " + pickupPlayer["position"] + " " + pickupPlayer["first_name"] + " " + pickupPlayer["last_name"] + " recovers it.")
-                                    print((str(period) + pInd if period <= periodPerGame else "OT"+str(period-periodPerGame))+ ": "+game_clock_text+ " / Shot Clock: :"+ shot_clock_text+ " ("+ possTeam+ ")")
+                                    print(
+                                        "Pass from "
+                                        + gs.possPlayer["position"]
+                                        + " "
+                                        + gs.possPlayer["first_name"]
+                                        + " "
+                                        + gs.possPlayer["last_name"]
+                                        + " toward "
+                                        + format_court_pos(targetPos)
+                                        + " is deflected! His teammate "
+                                        + pickupPlayer["position"]
+                                        + " "
+                                        + pickupPlayer["first_name"]
+                                        + " "
+                                        + pickupPlayer["last_name"]
+                                        + " recovers it."
+                                    )
+                                    print(
+                                        periodLabel
+                                        + ": "
+                                        + game_clock_text
+                                        + " / Shot Clock: :"
+                                        + shot_clock_text
+                                        + " ("
+                                        + gs.possTeam
+                                        + ")"
+                                    )
                                     print(footerPos)
-                                    printMomentumMeter()
-                                    possPlayer = pickupPlayer
-                                    assistPlayer = None
+                                    gs.printMomentumMeter()
+                                    gs.possPlayer = pickupPlayer
+                                    gs.assistPlayer = None
+                                    gs.pbp.append(gs.make_play(pass_ball, pass_deflected, elapsed=elapsedTime, ball_carrier=passingPlayer, defender=defender, team_id=passingTeamId))
                                 else:
                                     pickupPlayer = random.choice(list(defense_df.values()))
-                                    print("Pass from " + possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " toward " + format_court_pos(targetPos) + " is deflected! It's recovered by " + pickupPlayer["position"] + " " + pickupPlayer["first_name"] + " " + pickupPlayer["last_name"] + " for " + defense)
-                                    currShotClock = shotClock
-                                    if currTime <= shotClock:
-                                        currShotClock = currTime
-                                    crossed_midcourt = False
-                                    if possTeam == t1:
-                                        t1stats.at[possPlayer['id'].item(), 'TO'] += 1
-                                        t2stats.at[pickupPlayer['id'].item(), 'Stl'] += 1
-                                        possTeam = t2
+                                    print(
+                                        "Pass from "
+                                        + gs.possPlayer["position"]
+                                        + " "
+                                        + gs.possPlayer["first_name"]
+                                        + " "
+                                        + gs.possPlayer["last_name"]
+                                        + " toward "
+                                        + format_court_pos(targetPos)
+                                        + " is deflected! It's recovered by "
+                                        + pickupPlayer["position"]
+                                        + " "
+                                        + pickupPlayer["first_name"]
+                                        + " "
+                                        + pickupPlayer["last_name"]
+                                        + " for "
+                                        + defense
+                                    )
+                                    gs.currShotClock = gs.shotClock
+                                    if gs.currTime <= gs.shotClock:
+                                        gs.currShotClock = gs.currTime
+                                    gs.crossed_midcourt = False
+                                    if gs.possTeam == t1:
+                                        gs.t1stats.at[gs.possPlayer['id'].item(), 'TO'] += 1
+                                        gs.t2stats.at[pickupPlayer['id'].item(), 'Stl'] += 1
+                                        gs.possTeam = t2
                                         offense = t2
                                         defense = t1
-                                        offense_df = t2onCourt
-                                        defense_df = t1onCourt
-                                        defendedPlayerId = None
-                                        currentDefender = None
-                                        previousDefender = None
+                                        offense_df = gs.t2onCourt
+                                        defense_df = gs.t1onCourt
                                     else:
-                                        t2stats.at[possPlayer['id'].item(), 'TO'] += 1
-                                        t1stats.at[pickupPlayer['id'].item(), 'Stl'] += 1
-                                        possTeam = t1
+                                        gs.t2stats.at[gs.possPlayer['id'].item(), 'TO'] += 1
+                                        gs.t1stats.at[pickupPlayer['id'].item(), 'Stl'] += 1
+                                        gs.possTeam = t1
                                         offense = t1
                                         defense = t2
-                                        offense_df = t1onCourt
-                                        defense_df = t2onCourt
-                                        defendedPlayerId = None
-                                        currentDefender = None
-                                        previousDefender = None
-                                    possPlayer = pickupPlayer
-                                    pickupPlayer = ""
-                                    assistPlayer = None
-
+                                        offense_df = gs.t1onCourt
+                                        defense_df = gs.t2onCourt
+                                    gs.defendedPlayerId = None
+                                    gs.currentDefender = None
+                                    gs.previousDefender = None
+                                    gs.possPlayer = pickupPlayer
+                                    gs.assistPlayer = None
+                                    gs.pbp.append(gs.make_play(pass_ball, pass_intercepted, elapsed=elapsedTime, ball_carrier=passingPlayer, defender=defender, stealing_id=int(pickupPlayer["ID"]), team_id=passingTeamId))
                             else:
-                                assistPlayer = possPlayer
-                                assistMovementCount = 0
-                                eligiblePassReceivers = [player for player in offense_df.values() if int(player["id"]) != int(possPlayer["id"])]
-                                passTargetPreferenceZone = getPreferenceZone(get_shot_zone(targetPos))
-                                if passTargetPreferenceZone is not None:
-                                    passTargetPreferenceColumn = {"inside":"inside_preference","midrange":"midrange_preference","three":"three_preference"}[passTargetPreferenceZone]
-                                    passReceiverWeights = [max(passReceiverPreferenceMinimumWeight,min(passReceiverPreferenceMaximumWeight,1.0 + ((float(player[passTargetPreferenceColumn]) - activeLineupPreferences[passTargetPreferenceZone]) * passReceiverPreferenceWeightPerProportionPoint))) for player in eligiblePassReceivers]
-                                    passReceiverIndex = random.choices(range(len(eligiblePassReceivers)),weights=passReceiverWeights,k=1)[0]
+                                gs.assistPlayer = gs.possPlayer
+                                gs.assistMovementCount = 0
+                                eligiblePassReceivers = [
+                                    p for p in offense_df.values() if int(p["id"]) != int(gs.possPlayer["id"])
+                                ]
+                                passTargetPrefZone = gs.getPreferenceZone(get_shot_zone(targetPos))
+                                if passTargetPrefZone is not None:
+                                    ptpCol = {
+                                        "inside": "inside_preference",
+                                        "midrange": "midrange_preference",
+                                        "three": "three_preference",
+                                    }[passTargetPrefZone]
+                                    passReceiverWeights = [
+                                        max(
+                                            gs.passReceiverPreferenceMinimumWeight,
+                                            min(
+                                                gs.passReceiverPreferenceMaximumWeight,
+                                                1.0
+                                                + (
+                                                    (float(p[ptpCol]) - activeLineupPreferences[passTargetPrefZone])
+                                                    * gs.passReceiverPreferenceWeightPerProportionPoint
+                                                ),
+                                            ),
+                                        )
+                                        for p in eligiblePassReceivers
+                                    ]
+                                    passReceiverIndex = random.choices(
+                                        range(len(eligiblePassReceivers)), weights=passReceiverWeights, k=1
+                                    )[0]
                                     passReceive = eligiblePassReceivers[passReceiverIndex]
-                                    print(f"Pass receiver preference: {passTargetPreferenceZone} | Selected: {passReceive['first_name']} {passReceive['last_name']} {float(passReceive[passTargetPreferenceColumn]):.1f}% | Active lineup: {activeLineupPreferences[passTargetPreferenceZone]:.1f}% | Selection weight: {passReceiverWeights[passReceiverIndex]:.3f}")
+                                    print(
+                                        f"Pass receiver preference: {passTargetPrefZone} | Selected: {passReceive['first_name']} {passReceive['last_name']} {float(passReceive[ptpCol]):.1f}% | Active lineup: {activeLineupPreferences[passTargetPrefZone]:.1f}% | Selection weight: {passReceiverWeights[passReceiverIndex]:.3f}"
+                                    )
                                 else:
                                     passReceive = random.choice(eligiblePassReceivers)
-                                courtPos = targetPos
-                                crossed_midcourt = update_crossed_midcourt(team_side, courtPos, crossed_midcourt)
-                                print((str(period) + pInd if period <= periodPerGame else "OT"+str(period-periodPerGame))+ ": "+game_clock_text+ " / Shot Clock: :"+ shot_clock_text+ " ("+ possTeam+ ")")
-                                print(possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " passes the ball to " + passReceive["position"] + " " + passReceive["first_name"] + " " + passReceive["last_name"] + ".")
+                                gs.courtPos = targetPos
+                                gs.crossed_midcourt = update_crossed_midcourt(
+                                    team_side, gs.courtPos, gs.crossed_midcourt
+                                )
+                                print(
+                                    periodLabel
+                                    + ": "
+                                    + game_clock_text
+                                    + " / Shot Clock: :"
+                                    + shot_clock_text
+                                    + " ("
+                                    + gs.possTeam
+                                    + ")"
+                                )
+                                print(
+                                    gs.possPlayer["position"]
+                                    + " "
+                                    + gs.possPlayer["first_name"]
+                                    + " "
+                                    + gs.possPlayer["last_name"]
+                                    + " passes the ball to "
+                                    + passReceive["position"]
+                                    + " "
+                                    + passReceive["first_name"]
+                                    + " "
+                                    + passReceive["last_name"]
+                                    + "."
+                                )
                                 print(footerPos)
-                                printMomentumMeter()
-                                possPlayer = passReceive
-                                passReceive = ""
-
+                                gs.printMomentumMeter()
+                                gs.pbp.append(gs.make_play(pass_ball, pass_success, elapsed=elapsedTime, ball_carrier=passingPlayer, defender=defender, passed_id=int(passReceive["ID"]), team_id=passingTeamId))
+                                gs.possPlayer = passReceive
                         else:
-                            assistPlayer = None
-                            print((str(period) + pInd if period <= periodPerGame else "OT"+str(period-periodPerGame))+ ": "+game_clock_text+ " / Shot Clock: :"+ shot_clock_text+ " ("+ possTeam+ ")")
-                            print(possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " has no legal passing lane.")
+                            gs.assistPlayer = None
+                            print(
+                                periodLabel
+                                + ": "
+                                + game_clock_text
+                                + " / Shot Clock: :"
+                                + shot_clock_text
+                                + " ("
+                                + gs.possTeam
+                                + ")"
+                            )
+                            print(
+                                gs.possPlayer["position"]
+                                + " "
+                                + gs.possPlayer["first_name"]
+                                + " "
+                                + gs.possPlayer["last_name"]
+                                + " has no legal passing lane."
+                            )
                             print(footerPos)
-                            printMomentumMeter()
+                            gs.printMomentumMeter()
+                            gs.pbp.append(gs.make_play(pass_ball, no_passing_lane, elapsed=elapsedTime))
 
                     elif action == "turnover":
-                        assistPlayer = None
-                        turnoverTeam = possTeam
+                        gs.assistPlayer = None
+                        turnoverTeam = gs.possTeam
+                        turnoverPlayer = gs.possPlayer
+                        turnoverTeamId = int((gs.t1team_df if turnoverTeam == t1 else gs.t2team_df)["id"].iloc[0])
                         if turnoverTeam == t1:
-                            t1stats.at[possPlayer["id"].item(),"TO"] += 1
+                            gs.t1stats.at[gs.possPlayer["id"].item(), "TO"] += 1
                         else:
-                            t2stats.at[possPlayer["id"].item(),"TO"] += 1
-
-                        print((str(period) + pInd if period <= periodPerGame else "OT"+str(period-periodPerGame))+ ": "+game_clock_text+ " / Shot Clock: :"+ shot_clock_text+ " ("+ possTeam+ ")")
-                        print(possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " loses the ball out of bounds.")
-
-                        mediaTimeoutTaken = checkTimeoutStoppage(defense,True)
+                            gs.t2stats.at[gs.possPlayer["id"].item(), "TO"] += 1
+                        print(
+                            periodLabel
+                            + ": "
+                            + game_clock_text
+                            + " / Shot Clock: :"
+                            + shot_clock_text
+                            + " ("
+                            + gs.possTeam
+                            + ")"
+                        )
+                        print(
+                            gs.possPlayer["position"]
+                            + " "
+                            + gs.possPlayer["first_name"]
+                            + " "
+                            + gs.possPlayer["last_name"]
+                            + " loses the ball out of bounds."
+                        )
+                        mediaTimeoutTaken = gs.checkTimeoutStoppage(defense, True)
                         if not mediaTimeoutTaken:
-                            t1onCourt,t2onCourt,lineupParameters = pullSubs(False)
+                            gs.applySubs(False)
                             print(t1 + " Subs:")
-                            for i in list(t1onCourt.values()):
-                                print(i["position"] + " " + i["first_name"] + " " + i["last_name"])
+                            for p in gs.t1onCourt.values():
+                                print(p["position"] + " " + p["first_name"] + " " + p["last_name"])
                             print(t2 + " Subs:")
-                            for i in list(t2onCourt.values()):
-                                print(i["position"] + " " + i["first_name"] + " " + i["last_name"])
-
-                        if turnoverTeam == t1:
-                            offense_df = t2onCourt
-                            defense_df = t1onCourt
-                        else:
-                            offense_df = t1onCourt
-                            defense_df = t2onCourt
-
+                            for p in gs.t2onCourt.values():
+                                print(p["position"] + " " + p["first_name"] + " " + p["last_name"])
+                        offense_df = gs.t2onCourt if turnoverTeam == t1 else gs.t1onCourt
+                        defense_df = gs.t1onCourt if turnoverTeam == t1 else gs.t2onCourt
                         toTakeout = random.choice(list(offense_df.values()))
-                        print(toTakeout["position"] + " " + toTakeout["first_name"] + " " + toTakeout["last_name"] + " will take the ball out for " + defense + ".")
-                        finalHeavePending = True
+                        print(
+                            toTakeout["position"]
+                            + " "
+                            + toTakeout["first_name"]
+                            + " "
+                            + toTakeout["last_name"]
+                            + " will take the ball out for "
+                            + defense
+                            + "."
+                        )
+                        gs.finalHeavePending = True
                         print(footerPos)
-                        printMomentumMeter()
-                        currShotClock = shotClock
-                        if currTime <= shotClock:
-                            currShotClock = currTime
-                        possPlayer = toTakeout
-                        defendedPlayerId = None
-                        currentDefender = None
-                        previousDefender = None
-
+                        gs.printMomentumMeter()
+                        gs.currShotClock = gs.shotClock
+                        if gs.currTime <= gs.shotClock:
+                            gs.currShotClock = gs.currTime
+                        gs.possPlayer = toTakeout
+                        gs.defendedPlayerId = None
+                        gs.currentDefender = None
+                        gs.previousDefender = None
                         if turnoverTeam == t1:
-                            possTeam = t2
-                            offense = t2
-                            defense = t1
-                            if crossed_midcourt == False:
-                                courtPos = (-2,1)
-                            else:
-                                courtPos = (2,1)
+                            gs.possTeam = t2
+                            gs.courtPos = (-2, 1) if not gs.crossed_midcourt else (2, 1)
                         else:
-                            possTeam = t1
-                            offense = t1
-                            defense = t2
-                            if crossed_midcourt == False:
-                                courtPos = (2,1)
-                            else:
-                                courtPos = (-2,1)
+                            gs.possTeam = t1
+                            gs.courtPos = (2, 1) if not gs.crossed_midcourt else (-2, 1)
+                        gs.pbp.append(gs.make_play(turnover, out_of_bounds_turnover, elapsed=elapsedTime, ball_carrier=turnoverPlayer, team_id=turnoverTeamId))
 
                     elif action == "steal":
-                        assistPlayer = None
+                        gs.assistPlayer = None
+                        stolenFromPlayer = gs.possPlayer
+                        stolenFromTeamId = int((gs.t1team_df if gs.possTeam == t1 else gs.t2team_df)["id"].iloc[0])
                         stealPlayer = random.choice(list(defense_df.values()))
-                        print((str(period) + pInd if period <= periodPerGame else "OT"+str(period-periodPerGame))+ ": "+game_clock_text+ " / Shot Clock: :"+ shot_clock_text+ " ("+ possTeam+ ")")
-                        print(stealPlayer["position"] + " " + stealPlayer["first_name"] + " " + stealPlayer["last_name"] + " picks the ball away for " + defense + "!")
-                        adjustMomentum(defense,momentumStealSwing,"steal")
+                        print(
+                            periodLabel
+                            + ": "
+                            + game_clock_text
+                            + " / Shot Clock: :"
+                            + shot_clock_text
+                            + " ("
+                            + gs.possTeam
+                            + ")"
+                        )
+                        print(
+                            stealPlayer["position"]
+                            + " "
+                            + stealPlayer["first_name"]
+                            + " "
+                            + stealPlayer["last_name"]
+                            + " picks the ball away for "
+                            + defense
+                            + "!"
+                        )
+                        gs.adjustMomentum(defense, momentumStealSwing, "steal")
                         print(footerPos)
-                        printMomentumMeter()
-                        if possTeam == t1:
-                            t1stats.at[possPlayer['id'].item(), 'TO'] += 1
-                            t2stats.at[stealPlayer['id'].item(), 'Stl'] += 1
-                            possTeam = t2
-                            offense = t2
-                            defense = t1
-                            offense_df = t2onCourt
-                            defense_df = t1onCourt
-                            defendedPlayerId = None
-                            currentDefender = None
-                            previousDefender = None
+                        gs.printMomentumMeter()
+                        if gs.possTeam == t1:
+                            gs.t1stats.at[gs.possPlayer['id'].item(), 'TO'] += 1
+                            gs.t2stats.at[stealPlayer['id'].item(), 'Stl'] += 1
+                            gs.possTeam = t2
+                            offense_df = gs.t2onCourt
+                            defense_df = gs.t1onCourt
                         else:
-                            t2stats.at[possPlayer['id'].item(), 'TO'] += 1
-                            t1stats.at[stealPlayer['id'].item(), 'Stl'] += 1
-                            possTeam = t1
-                            offense = t1
-                            defense = t2
-                            offense_df = t1onCourt
-                            defense_df = t2onCourt
-                            defendedPlayerId = None
-                            currentDefender = None
-                            previousDefender = None
-                        possPlayer = stealPlayer
-                        stealPlayer = ""
-                        currShotClock = shotClock
-                        if currTime <= shotClock:
-                            currShotClock = currTime
-                        crossed_midcourt = False
-
-        if currTime <= 0 and gameOn == True:
-            periodOn = False
-            assistPlayer = None
-            if period < periodPerGame:
-                print("End of "+("Half " if league == "CBB" else "Quarter ")+str(period)+".\n"+t1+": "+str(t1pts)+" / "+t2+": "+str(t2pts))
-                period += 1
-                lastCountedPossessionTeam = None
-                if (league == "CBB" and period == 2) or (league != "CBB" and period == 3):
-                    t1FoulProtectionBench.clear()
-                    t2FoulProtectionBench.clear()
-                    t1PlayerHalfFouls.clear()
-                    t2PlayerHalfFouls.clear()
+                            gs.t2stats.at[gs.possPlayer['id'].item(), 'TO'] += 1
+                            gs.t1stats.at[stealPlayer['id'].item(), 'Stl'] += 1
+                            gs.possTeam = t1
+                            offense_df = gs.t1onCourt
+                            defense_df = gs.t2onCourt
+                        gs.defendedPlayerId = None
+                        gs.currentDefender = None
+                        gs.previousDefender = None
+                        gs.possPlayer = stealPlayer
+                        gs.currShotClock = gs.shotClock
+                        if gs.currTime <= gs.shotClock:
+                            gs.currShotClock = gs.currTime
+                        gs.crossed_midcourt = False
+                        gs.pbp.append(gs.make_play(steal, steal_success, elapsed=elapsedTime, ball_carrier=stolenFromPlayer, defender=defender, stealing_id=int(stealPlayer["ID"]), team_id=stolenFromTeamId))
+        if gs.currTime <= 0 and gs.gameOn:
+            gs.periodOn = False
+            gs.assistPlayer = None
+            if gs.period > gs.periodPerGame:
+                gs.pbp.append(gs.make_play(overtimeOver, no_outcome))
+            elif gs.league == "CBB" and gs.period == 1:
+                gs.pbp.append(gs.make_play(halfOver, no_outcome))
+            elif gs.league != "CBB" and gs.period == 2:
+                gs.pbp.append(gs.make_play(halfOver, no_outcome))
+            elif gs.league != "CBB":
+                gs.pbp.append(gs.make_play(quarterOver, no_outcome))
+            if gs.period < gs.periodPerGame:
+                print(
+                    "End of "
+                    + ("Half " if gs.league == "CBB" else "Quarter ")
+                    + str(gs.period)
+                    + ".\n"
+                    + t1
+                    + ": "
+                    + str(gs.t1pts)
+                    + " / "
+                    + t2
+                    + ": "
+                    + str(gs.t2pts)
+                )
+                gs.period += 1
+                gs.lastCountedPossessionTeam = None
+                if (gs.league == "CBB" and gs.period == 2) or (gs.league != "CBB" and gs.period == 3):
+                    gs.t1FoulProtectionBench.clear()
+                    gs.t2FoulProtectionBench.clear()
+                    gs.t1PlayerHalfFouls.clear()
+                    gs.t2PlayerHalfFouls.clear()
                     print("Halftime: all foul-protection restrictions have been cleared.")
-                if league == "CBB":
-                    applyFatigueRecovery(halftimeRecoveryMinutes,"Halftime breather")
-                    dampenMomentum(momentumHalftimeRetention,"halftime")
-                elif period == 3:
-                    applyFatigueRecovery(halftimeRecoveryMinutes,"Halftime breather")
-                    dampenMomentum(momentumHalftimeRetention,"halftime")
+                if gs.league == "CBB":
+                    gs.applyFatigueRecovery(halftimeRecoveryMinutes, "Halftime breather")
+                    gs.dampenMomentum(momentumHalftimeRetention, "halftime")
+                elif gs.period == 3:
+                    gs.applyFatigueRecovery(halftimeRecoveryMinutes, "Halftime breather")
+                    gs.dampenMomentum(momentumHalftimeRetention, "halftime")
                 else:
-                    applyFatigueRecovery(quarterBreakRecoveryMinutes,"Quarter-break breather")
-                    dampenMomentum(momentumQuarterBreakRetention,"quarter break")
-                if league == "CBB" and period == 2:
-                    t1onCourt, t2onCourt, lineupParameters = pullSubs(True)
-                    print(t1 + " Subs:")
-                    for i in list(t1onCourt.values()):
-                        print(i['position'] + " " + i['first_name'] + " " + i['last_name'])
-                    print(t2 + " Subs:")
-                    for i in list(t2onCourt.values()):
-                        print(i['position'] + " " + i['first_name'] + " " + i['last_name'])
-                elif league != "CBB" and period == 3:
-                    print(t1 + " Subs:")
-                    t1onCourt, t2onCourt, lineupParameters = pullSubs(True)
-                    for i in list(t1onCourt.values()):
-                        print(i['position'] + " " + i['first_name'] + " " + i['last_name'])
-                    print(t2 + " Subs:")
-                    for i in list(t2onCourt.values()):
-                        print(i['position'] + " " + i['first_name'] + " " + i['last_name'])
+                    gs.applyFatigueRecovery(quarterBreakRecoveryMinutes, "Quarter-break breather")
+                    gs.dampenMomentum(momentumQuarterBreakRetention, "quarter break")
+                if (gs.league == "CBB" and gs.period == 2) or (gs.league != "CBB" and gs.period == 3):
+                    gs.applySubs(True)
                 else:
-                    t1onCourt, t2onCourt, lineupParameters = pullSubs(False)
-                    print(t1 + " Subs:")
-                    for i in list(t1onCourt.values()):
-                        print(i['position'] + " " + i['first_name'] + " " + i['last_name'])
-                    print(t2 + " Subs:")
-                    for i in list(t2onCourt.values()):
-                        print(i['position'] + " " + i['first_name'] + " " + i['last_name'])
-                currShotClock = shotClock
-                currTime = qtrTime
-                crossed_midcourt = False
-                if possTeam == t1:
-                    toTakeout = random.choice(list(t1onCourt.values()))
-                    possPlayer = toTakeout
-                    toTakeout = ""
-                    print(possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " takes the ball out to begin the " + ("half " if league == "CBB" else "quarter ") + " for " + possTeam + ".")
-                    finalHeavePending = True
-                    courtPos = (4, 3)
-                elif possTeam == t2:
-                    toTakeout = random.choice(list(t2onCourt.values()))
-                    possPlayer = toTakeout
-                    toTakeout = ""
-                    print(possPlayer["position"] + " " + possPlayer["first_name"] + " " + possPlayer["last_name"] + " takes the ball out to begin the " + ("half " if league == "CBB" else "quarter ") + " for " + possTeam + ".")
-                    finalHeavePending = True
-                    courtPos = (-4, 3)
-                periodOn = True
-            elif period >= periodPerGame and t1pts == t2pts:
-                print("We're headed to overtime!")
-                period += 1
-                lastCountedPossessionTeam = None
-                overtimeTimeoutAddition = 1 if league == "CBB" else 2
-                teamTimeoutsRemaining[t1] += overtimeTimeoutAddition
-                teamTimeoutsRemaining[t2] += overtimeTimeoutAddition
-                print(f"Overtime timeout allocation: {t1} and {t2} each receive {overtimeTimeoutAddition} additional timeout{'s' if overtimeTimeoutAddition != 1 else ''}.")
-                applyFatigueRecovery(overtimeBreakRecoveryMinutes,"Overtime breather")
-                dampenMomentum(momentumOvertimeBreakRetention,"overtime break")
-                currShotClock = shotClock
-                currTime = otQtrTime
-                t1onCourt, t2onCourt, lineupParameters = pullSubs(True)
+                    gs.applySubs(False)
                 print(t1 + " Subs:")
-                for i in list(t1onCourt.values()):
-                    print(i['position'] + " " + i['first_name'] + " " + i['last_name'])
+                for p in gs.t1onCourt.values():
+                    print(p['position'] + " " + p['first_name'] + " " + p['last_name'])
                 print(t2 + " Subs:")
-                for i in list(t2onCourt.values()):
-                    print(i['position'] + " " + i['first_name'] + " " + i['last_name'])
-                crossed_midcourt = False
-                courtPos = (0,3)
-                possTeam = "OT_TIPOFF"
-                periodOn = True
+                for p in gs.t2onCourt.values():
+                    print(p['position'] + " " + p['first_name'] + " " + p['last_name'])
+                gs.currShotClock = gs.shotClock
+                gs.currTime = gs.qtrTime
+                gs.crossed_midcourt = False
+                if gs.possTeam == t1:
+                    gs.possPlayer = random.choice(list(gs.t1onCourt.values()))
+                    print(
+                        gs.possPlayer["position"]
+                        + " "
+                        + gs.possPlayer["first_name"]
+                        + " "
+                        + gs.possPlayer["last_name"]
+                        + " takes the ball out to begin the "
+                        + ("half " if gs.league == "CBB" else "quarter ")
+                        + "for "
+                        + gs.possTeam
+                        + "."
+                    )
+                    gs.finalHeavePending = True
+                    gs.courtPos = (4, 3)
+                    gs.pbp.append(gs.make_play(inbound, inbound_success, ball_carrier=gs.possPlayer))
+                elif gs.possTeam == t2:
+                    gs.possPlayer = random.choice(list(gs.t2onCourt.values()))
+                    print(
+                        gs.possPlayer["position"]
+                        + " "
+                        + gs.possPlayer["first_name"]
+                        + " "
+                        + gs.possPlayer["last_name"]
+                        + " takes the ball out to begin the "
+                        + ("half " if gs.league == "CBB" else "quarter ")
+                        + "for "
+                        + gs.possTeam
+                        + "."
+                    )
+                    gs.finalHeavePending = True
+                    gs.courtPos = (-4, 3)
+                    gs.pbp.append(gs.make_play(inbound, inbound_success, ball_carrier=gs.possPlayer))
+                gs.periodOn = True
+            elif gs.period >= gs.periodPerGame and gs.t1pts == gs.t2pts:
+                print("We're headed to overtime!")
+                gs.period += 1
+                gs.lastCountedPossessionTeam = None
+                otAdd = 1 if gs.league == "CBB" else 2
+                gs.teamTimeoutsRemaining[t1] += otAdd
+                gs.teamTimeoutsRemaining[t2] += otAdd
+                print(
+                    f"Overtime timeout allocation: {t1} and {t2} each receive {otAdd} additional timeout{'s' if otAdd != 1 else ''}."
+                )
+                gs.applyFatigueRecovery(overtimeBreakRecoveryMinutes, "Overtime breather")
+                gs.dampenMomentum(momentumOvertimeBreakRetention, "overtime break")
+                gs.currShotClock = gs.shotClock
+                gs.currTime = gs.otQtrTime
+                gs.applySubs(True)
+                print(t1 + " Subs:")
+                for p in gs.t1onCourt.values():
+                    print(p['position'] + " " + p['first_name'] + " " + p['last_name'])
+                print(t2 + " Subs:")
+                for p in gs.t2onCourt.values():
+                    print(p['position'] + " " + p['first_name'] + " " + p['last_name'])
+                gs.crossed_midcourt = False
+                gs.courtPos = (0, 3)
+                gs.possTeam = "OT_TIPOFF"
+                gs.periodOn = True
+                gs.pbp.append(gs.make_play(overtimeStart, no_outcome))
             else:
                 print("End of the game.")
-                gameOn = False
+                gs.pbp.append(gs.make_play(gameOver, no_outcome))
+                gs.gameOn = False
 
-    if gameOn == False:
-        #print("    " + t1 + "  |    " + t2)
-        #print(pInd + "1: " + str(t1q1pts) + "    |    " + str(t2q1pts))
-        #print(pInd + "2: " + str(t1q2pts) + "    |    " + str(t2q2pts))
-        #if league != "CBB":
-            #print("Q3: " + str(t1q3pts) + "    |    " + str(t2q3pts))
-            #print("Q4: " + str(t1q4pts) + "    |    " + str(t2q4pts))
-        #if (period - 1) > periodPerGame:
-            #print("OT: " + str(t1qotpts) + "    |    " + str(t2qotpts))
-        #print("F:  " + str(t1pts) + "   |    " + str(t2pts))
-        #print(" ")
-        #print("2Pt: " + str(t12m) + "/" + str(t12a) + " | " + str(t22m) + "/" + str(t22a))
-        #print("3Pt: " + str(t13m) + "/" + str(t13a) + " | " + str(t23m) + "/" + str(t23a))
+    # ------------------------------------------------------------------ final stats
+    gs.t1stats["MP"] = (gs.t1stats["MP"] / 60).round(2)
+    gs.t1stats['Pts'] = (
+        (gs.t1stats['FT Shot Made'] * 1)
+        + (gs.t1stats['Ins Shot Made'] * 2)
+        + (gs.t1stats['Mid Shot Made'] * 2)
+        + (gs.t1stats['3PT Shot Made'] * 3)
+    )
+    gs.t1stats['TREB'] = gs.t1stats['DREB'] + gs.t1stats['OREB']
+    gs.t2stats["MP"] = (gs.t2stats["MP"] / 60).round(2)
+    gs.t2stats['Pts'] = (
+        (gs.t2stats['FT Shot Made'] * 1)
+        + (gs.t2stats['Ins Shot Made'] * 2)
+        + (gs.t2stats['Mid Shot Made'] * 2)
+        + (gs.t2stats['3PT Shot Made'] * 3)
+    )
+    gs.t2stats['TREB'] = gs.t2stats['DREB'] + gs.t2stats['OREB']
+    for stats in (gs.t1stats, gs.t2stats):
+        for col, att, made in [
+            ('Ins Shot %', 'Ins Shot Att', 'Ins Shot Made'),
+            ('Mid Shot %', 'Mid Shot Att', 'Mid Shot Made'),
+            ('3PT Shot %', '3PT Shot Att', '3PT Shot Made'),
+            ('FT Shot %', 'FT Shot Att', 'FT Shot Made'),
+        ]:
+            try:
+                stats[col] = (stats[made] / stats[att]).round(4) * 100
+            except ZeroDivisionError:
+                stats[col] = 0
+    for ts, stats in [(gs.t1teamstats, gs.t1stats), (gs.t2teamstats, gs.t2stats)]:
+        for col, att, made in [
+            ('Ins Shot %', 'Ins Shot Att', 'Ins Shot Made'),
+            ('Mid Shot %', 'Mid Shot Att', 'Mid Shot Made'),
+            ('3PT Shot %', '3PT Shot Att', '3PT Shot Made'),
+            ('FT Shot %', 'FT Shot Att', 'FT Shot Made'),
+        ]:
+            try:
+                ts[col] = (stats[made].sum() / stats[att].sum()).round(4) * 100
+            except ZeroDivisionError:
+                ts[col] = 0
+        ts['Ins Shot Att'] = stats['Ins Shot Att'].sum()
+        ts['Ins Shot Made'] = stats['Ins Shot Made'].sum()
+        ts['Mid Shot Att'] = stats['Mid Shot Att'].sum()
+        ts['Mid Shot Made'] = stats['Mid Shot Made'].sum()
+        ts['3PT Shot Att'] = stats['3PT Shot Att'].sum()
+        ts['3PT Shot Made'] = stats['3PT Shot Made'].sum()
+        ts['FT Shot Att'] = stats['FT Shot Att'].sum()
+        ts['FT Shot Made'] = stats['FT Shot Made'].sum()
+        ts['TREB'] = stats['DREB'].sum() + stats['OREB'].sum()
+        ts['OREB'] = stats['OREB'].sum()
+        ts['DREB'] = stats['DREB'].sum()
+        ts['Stl'] = stats['Stl'].sum()
+        ts['Blk'] = stats['Blk'].sum()
+        ts['TO'] = stats['TO'].sum()
+        ts['Foul'] = stats['Foul'].sum()
+        ts['Assist'] = stats['Assist'].sum()
+    gs.t1teamstats['Poss'] = gs.teamPossessions[t1]
+    gs.t1teamstats['TOP'] = f"{int(gs.teamPossessionTime[t1] // 60):02d}:{gs.teamPossessionTime[t1] % 60:04.1f}"
+    gs.t1teamstats['Pts'] = (
+        (gs.t1stats['FT Shot Made'].sum() * 1)
+        + (gs.t1stats['Ins Shot Made'].sum() * 2)
+        + (gs.t1stats['Mid Shot Made'].sum() * 2)
+        + (gs.t1stats['3PT Shot Made'].sum() * 3)
+    )
+    gs.t2teamstats['Poss'] = gs.teamPossessions[t2]
+    gs.t2teamstats['TOP'] = f"{int(gs.teamPossessionTime[t2] // 60):02d}:{gs.teamPossessionTime[t2] % 60:04.1f}"
+    gs.t2teamstats['Pts'] = (
+        (gs.t2stats['FT Shot Made'].sum() * 1)
+        + (gs.t2stats['Ins Shot Made'].sum() * 2)
+        + (gs.t2stats['Mid Shot Made'].sum() * 2)
+        + (gs.t2stats['3PT Shot Made'].sum() * 3)
+    )
+    gs.t1teamscore['P1'] = gs.t1q1pts
+    gs.t1teamscore['P2'] = gs.t1q2pts
+    gs.t1teamscore['P3'] = gs.t1q3pts
+    gs.t1teamscore['P4'] = gs.t1q4pts
+    gs.t1teamscore['OT'] = gs.t1qotpts
+    gs.t1teamscore['F'] = gs.t1q1pts + gs.t1q2pts + gs.t1q3pts + gs.t1q4pts + gs.t1qotpts
+    gs.t2teamscore['P1'] = gs.t2q1pts
+    gs.t2teamscore['P2'] = gs.t2q2pts
+    gs.t2teamscore['P3'] = gs.t2q3pts
+    gs.t2teamscore['P4'] = gs.t2q4pts
+    gs.t2teamscore['OT'] = gs.t2qotpts
+    gs.t2teamscore['F'] = gs.t2q1pts + gs.t2q2pts + gs.t2q3pts + gs.t2q4pts + gs.t2qotpts
+    pd.set_option('display.max_columns', None)
+    pd.set_option('display.max_colwidth', None)
+    pd.set_option('display.width', None)
+    teamscore = pd.concat([gs.t1teamscore, gs.t2teamscore], axis=0)
+    teamstats = pd.concat([gs.t1teamstats, gs.t2teamstats], axis=0)
+    print(teamscore)
+    print(teamstats)
+    print(gs.t1stats[gs.t1stats["MP"] > 0.00])
+    print(gs.t2stats[gs.t2stats["MP"] > 0.00])
+    gs.t1TeamStatsDTO = gs.to_team_stats_dto(True)
+    gs.t2TeamStatsDTO = gs.to_team_stats_dto(False)
+    gs.playerStatsDTOs = gs.to_player_stats_dtos()
+    return gs
 
-        t1stats["MP"] = (t1stats["MP"] / 60).round(2)
-        t1stats['Pts'] = (t1stats['FT Shot Made']*1) + (t1stats['Ins Shot Made']*2) + (t1stats['Mid Shot Made']*2) + (t1stats['3PT Shot Made']*3)
-        t1stats['TREB'] = (t1stats['DREB'] + t1stats['OREB'])
-        try:
-            t1stats['Ins Shot %'] = (((t1stats['Ins Shot Made'] / t1stats['Ins Shot Att'])).round(4))*100
-        except ZeroDivisionError:
-            t1stats['Ins Shot %'] = 0
-        try:
-            t1stats['Mid Shot %'] = (((t1stats['Mid Shot Made'] / t1stats['Mid Shot Att'])).round(4))*100
-        except ZeroDivisionError:
-            t1stats['Mid Shot %'] = 0
-        try:
-            t1stats['3PT Shot %'] = (((t1stats['3PT Shot Made'] / t1stats['3PT Shot Att'])).round(4))*100
-        except ZeroDivisionError:
-            t1stats['3PT Shot %'] = 0
-        try:
-            t1stats['FT Shot %'] = (((t1stats['FT Shot Made'] / t1stats['FT Shot Att'])).round(4))*100
-        except ZeroDivisionError:
-            t1stats['FT Shot %'] = 0
+    # results = MatchResults(
+    #     team_one, team_two, t1State.Roster, t2State.Roster, gameid, is_nba
+    # )
 
-        try:
-            t1teamstats['Ins Shot %'] = (((t1stats['Ins Shot Made'].sum() / t1stats['Ins Shot Att'].sum())).round(4))*100
-        except ZeroDivisionError:
-            t1teamstats['Ins Shot %'] = 0
-        try:
-            t1teamstats['Mid Shot %'] = (((t1stats['Mid Shot Made'].sum() / t1stats['Mid Shot Att'].sum())).round(4))*100
-        except ZeroDivisionError:
-            t1teamstats['Mid Shot %'] = 0
-        try:
-            t1teamstats['3PT Shot %'] = (((t1stats['3PT Shot Made'].sum() / t1stats['3PT Shot Att'].sum())).round(4))*100
-        except ZeroDivisionError:
-            t1teamstats['3PT Shot %'] = 0
-        try:
-            t1teamstats['FT Shot %'] = (((t1stats['FT Shot Made'].sum() / t1stats['FT Shot Att'].sum())).round(4))*100
-        except ZeroDivisionError:
-            t1teamstats['FT Shot %'] = 0
-        t1teamstats['Ins Shot Att'] = t1stats['Ins Shot Att'].sum()
-        t1teamstats['Ins Shot Made'] = t1stats['Ins Shot Made'].sum()
-        t1teamstats['Mid Shot Att'] = t1stats['Mid Shot Att'].sum()
-        t1teamstats['Mid Shot Made'] = t1stats['Mid Shot Made'].sum()
-        t1teamstats['3PT Shot Att'] = t1stats['3PT Shot Att'].sum()
-        t1teamstats['3PT Shot Made'] = t1stats['3PT Shot Made'].sum()
-        t1teamstats['FT Shot Att'] = t1stats['FT Shot Att'].sum()
-        t1teamstats['FT Shot Made'] = t1stats['FT Shot Made'].sum()
-        t1teamstats['TREB'] = (t1stats['DREB'].sum() + t1stats['OREB'].sum())
-        t1teamstats['OREB'] = t1stats['OREB'].sum()
-        t1teamstats['DREB'] = t1stats['DREB'].sum()
-        t1teamstats['Stl'] = t1stats['Stl'].sum()
-        t1teamstats['Blk'] = t1stats['Blk'].sum()
-        t1teamstats['TO'] = t1stats['TO'].sum()
-        t1teamstats['Foul'] = t1stats['Foul'].sum()
-        t1teamstats['Assist'] = t1stats['Assist'].sum()
-        t1teamstats['Poss'] = teamPossessions[t1]
-        t1teamstats['TOP'] = f"{int(teamPossessionTime[t1] // 60):02d}:{teamPossessionTime[t1] % 60:04.1f}"
-        t1teamstats['Pts'] = (t1stats['FT Shot Made'].sum()*1) + (t1stats['Ins Shot Made'].sum()*2) + (t1stats['Mid Shot Made'].sum()*2) + (t1stats['3PT Shot Made'].sum()*3)
-
-        t2stats["MP"] = (t2stats["MP"] / 60).round(2)
-        t2stats['Pts'] = (t2stats['FT Shot Made']*1) + (t2stats['Ins Shot Made']*2) + (t2stats['Mid Shot Made']*2) + (t2stats['3PT Shot Made']*3)
-        t2stats['TREB'] = (t2stats['DREB'] + t2stats['OREB'])
-        try:
-            t2stats['Ins Shot %'] = (((t2stats['Ins Shot Made'] / t2stats['Ins Shot Att'])).round(4)*100)
-        except ZeroDivisionError:
-            t2stats['Ins Shot %'] = 0
-        try:
-            t2stats['Mid Shot %'] = (((t2stats['Mid Shot Made'] / t2stats['Mid Shot Att'])).round(4)*100)
-        except ZeroDivisionError:
-            t2stats['Mid Shot %'] = 0
-        try:
-            t2stats['3PT Shot %'] = (((t2stats['3PT Shot Made'] / t2stats['3PT Shot Att'])).round(4)*100)
-        except ZeroDivisionError:
-            t2stats['3PT Shot %'] = 0
-        try:
-            t2stats['FT Shot %'] = (((t2stats['FT Shot Made'] / t2stats['FT Shot Att'])).round(4)*100)
-        except ZeroDivisionError:
-            t2stats['FT Shot %'] = 0
-
-        try:
-            t2teamstats['Ins Shot %'] = (((t2stats['Ins Shot Made'].sum() / t2stats['Ins Shot Att'].sum())).round(4)*100)
-        except ZeroDivisionError:
-            t2teamstats['Ins Shot %'] = 0
-        try:
-            t2teamstats['Mid Shot %'] = (((t2stats['Mid Shot Made'].sum() / t2stats['Mid Shot Att'].sum())).round(4)*100)
-        except ZeroDivisionError:
-            t2teamstats['Mid Shot %'] = 0
-        try:
-            t2teamstats['3PT Shot %'] = (((t2stats['3PT Shot Made'].sum() / t2stats['3PT Shot Att'].sum())).round(4)*100)
-        except ZeroDivisionError:
-            t2teamstats['3PT Shot %'] = 0
-        try:
-            t2teamstats['FT Shot %'] = (((t2stats['FT Shot Made'].sum() / t2stats['FT Shot Att'].sum())).round(4)*100)
-        except ZeroDivisionError:
-            t2teamstats['FT Shot %'] = 0
-        t2teamstats['Ins Shot Att'] = t2stats['Ins Shot Att'].sum()
-        t2teamstats['Ins Shot Made'] = t2stats['Ins Shot Made'].sum()
-        t2teamstats['Mid Shot Att'] = t2stats['Mid Shot Att'].sum()
-        t2teamstats['Mid Shot Made'] = t2stats['Mid Shot Made'].sum()
-        t2teamstats['3PT Shot Att'] = t2stats['3PT Shot Att'].sum()
-        t2teamstats['3PT Shot Made'] = t2stats['3PT Shot Made'].sum()
-        t2teamstats['FT Shot Att'] = t2stats['FT Shot Att'].sum()
-        t2teamstats['FT Shot Made'] = t2stats['FT Shot Made'].sum()
-        t2teamstats['TREB'] = (t2stats['DREB'].sum() + t2stats['OREB'].sum())
-        t2teamstats['OREB'] = t2stats['OREB'].sum()
-        t2teamstats['DREB'] = t2stats['DREB'].sum()
-        t2teamstats['Stl'] = t2stats['Stl'].sum()
-        t2teamstats['Blk'] = t2stats['Blk'].sum()
-        t2teamstats['TO'] = t2stats['TO'].sum()
-        t2teamstats['Foul'] = t2stats['Foul'].sum()
-        t2teamstats['Assist'] = t2stats['Assist'].sum()
-        t2teamstats['Poss'] = teamPossessions[t2]
-        t2teamstats['TOP'] = f"{int(teamPossessionTime[t2] // 60):02d}:{teamPossessionTime[t2] % 60:04.1f}"
-        t2teamstats['Pts'] = (t2stats['FT Shot Made'].sum()*1) + (t2stats['Ins Shot Made'].sum()*2) + (t2stats['Mid Shot Made'].sum()*2) + (t2stats['3PT Shot Made'].sum()*3)
-
-        t1teamscore['P1'] = t1q1pts
-        t1teamscore['P2'] = t1q2pts
-        t1teamscore['P3'] = t1q3pts
-        t1teamscore['P4'] = t1q4pts
-        t1teamscore['OT'] = t1qotpts
-        t1teamscore['F'] = t1q1pts + t1q2pts + t1q3pts + t1q4pts + t1qotpts
-
-        t2teamscore['P1'] = t2q1pts
-        t2teamscore['P2'] = t2q2pts
-        t2teamscore['P3'] = t2q3pts
-        t2teamscore['P4'] = t2q4pts
-        t2teamscore['OT'] = t2qotpts
-        t2teamscore['F'] = t2q1pts + t2q2pts + t2q3pts + t2q4pts + t2qotpts
-
-        pd.set_option('display.max_columns', None)
-        pd.set_option('display.max_colwidth', None)
-        pd.set_option('display.width', None)
-        teamscore = pd.concat([t1teamscore, t2teamscore], axis=0)
-        teamstats = pd.concat([t1teamstats, t2teamstats], axis=0)
-        print(teamscore)
-        print(teamstats)
-        print(t1stats[t1stats["MP"] > 0.00])
-        print(t2stats[t2stats["MP"] > 0.00])
-        return teamscore,teamstats,t1stats,t2stats
+    # return results
