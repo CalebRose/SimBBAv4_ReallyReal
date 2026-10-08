@@ -45,16 +45,19 @@ _LINEUP_FIELD_MAP = {
     "fs_inside_proportion": "FSInsideProportion",
     "fs_mid_proportion":    "FSMidProportion",
     "fs_three_proportion":  "FSThreeProportion",
+    "fs_shot_volume":       "FSShotVolume",
     "second_string_id":     "SecondStringID",
     "ss_minutes":           "SSMinutes",
     "ss_inside_proportion": "SSInsideProportion",
     "ss_mid_proportion":    "SSMidProportion",
     "ss_three_proportion":  "SSThreeProportion",
+    "ss_shot_volume":       "SSShotVolume",
     "third_string_id":      "ThirdStringID",
     "ts_minutes":           "TSMinutes",
     "ts_inside_proportion": "TSInsideProportion",
     "ts_mid_proportion":    "TSMidProportion",
     "ts_three_proportion":  "TSThreeProportion",
+    "ts_shot_volume":       "TSShotVolume",
 }
 
 _GAMEPLAN_FIELD_MAP = {

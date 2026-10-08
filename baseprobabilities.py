@@ -126,6 +126,11 @@ shotClockAwarenessAverageBBIQ = 20.0
 shotClockAwarenessMaximumBBIQGap = 10.0
 shotClockAwarenessModifierPerPoint = 0.025
 
+# Shot volume (per-player gameplan control). The multiplier scales the player's shot-action chance; receiver strength softens it for pass-target weights.
+shotVolumeMultipliers = {"Rarely":0.40,"Reduced":0.70,"Normal":1.00,"Aggressive":1.20,"Green Light":1.40}
+shotVolumeDefault = "Normal"
+shotVolumeReceiverStrength = 0.50
+
 # Final heaves
 finalHeaveMaximumTime = 3.0
 finalHeaveDifficultyMultiplier = 0.15
