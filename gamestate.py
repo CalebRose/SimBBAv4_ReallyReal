@@ -483,7 +483,7 @@ class GameState:
         lead = oppPts - myPts
         t2a = gp["trigger2_enabled"] == 1 and lead >= gp["trigger2_value"]
         mp = next((p for p in onCourt.values() if int(p["id"]) == gp["trigger3_value"]), None)
-        me = self.getPlayerExhaustionPercent(mp, timeoutTeam) if mp else 0.0
+        me = self.getPlayerExhaustionPercent(mp, timeoutTeam) if mp is not None else 0.0
         t3a = gp["trigger3_enabled"] == 1 and mp is not None and me >= gp["trigger3_exhaustion"]
         ae = sum(self.getPlayerExhaustionPercent(p, timeoutTeam) for p in onCourt.values()) / max(1, len(onCourt))
         t4a = gp["trigger4_enabled"] == 1 and ae >= gp["trigger4_value"]

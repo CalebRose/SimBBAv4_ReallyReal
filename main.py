@@ -1,3 +1,4 @@
+import copy
 import os
 import sys
 from contextlib import redirect_stdout
@@ -45,9 +46,17 @@ for gameNumber, match in enumerate(matches, start=1):
     homeTeam = matchData.get("HomeTeam", {}).get("Abbr", "HOME")
     awayTeam = matchData.get("AwayTeam", {}).get("Abbr", "AWAY")
 
+    # Teams with a blank Abbr (international leagues) can't be told apart by the engine,
+    # so simulate a copy with a unique stand-in. The original match data is what gets posted.
+    simMatch = copy.deepcopy(match)
+    for side in ("HomeTeam", "AwayTeam"):
+        simTeam = simMatch.get("MatchData", {}).get(side, {})
+        if not simTeam.get("Abbr"):
+            simTeam["Abbr"] = f"T{simTeam.get('ID')}"
+
     with open(os.devnull, "w", encoding="utf-8") as quietOutput:
         with redirect_stdout(quietOutput):
-            gs = rungame(match, gameNumber)
+            gs = rungame(simMatch, gameNumber)
 
     if is_testing:
         logPath = logDirectory / f"game_{gameId}_{homeTeam}_vs_{awayTeam}.txt"

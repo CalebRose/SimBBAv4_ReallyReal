@@ -33,4 +33,9 @@ def GetTestMatchesForSimulation(dto):
 # Send match results to the API
 def SendResults(dto):
     obj = json.dumps(dto, default=lambda o: o.__dict__, sort_keys=True, indent=4)
+    with open("last_import_payload.json", "w", encoding="utf-8") as f:
+        f.write(obj)
+    print(f"Posting import payload ({len(obj) / 1e6:.1f} MB)...")
     r = requests.post(url + "admin/results/import/", data=obj)
+    print(f"Import response: HTTP {r.status_code} {r.text[:300]}")
+    return r
